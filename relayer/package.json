@@ -1,0 +1,19 @@
+{
+  "name": "alpha-market-relayer",
+  "version": "0.1.0",
+  "description": "Mirrors Polymarket markets and resolutions onto Robinhood Chain.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "live": "node src/index.js --live",
+    "once": "node src/index.js --once",
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "ethers": "^6.17.0"
+  },
+  "type": "module"
+}

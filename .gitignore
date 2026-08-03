@@ -1,0 +1,30 @@
+# Secrets. Four private keys live here: deployer, relayer, arbiter, guardian.
+.env
+
+# Build output, all reproducible with `forge build`
+out/
+cache/
+
+# Deployment transaction logs. The addresses that matter are committed in
+# contracts/deployments/*.json; these are the raw broadcast receipts.
+broadcast/
+
+# Dependencies
+node_modules/
+lib/
+
+# Relayer runtime state, rebuilt from chain on every start
+relayer/state.json
+
+# Research output. The scripts are committed, the fetched data is not:
+# it is large, it goes stale, and it can be regenerated.
+research/data/
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor and OS noise
+*.swp
+*~
+.DS_Store
