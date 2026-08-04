@@ -1,19 +1,23 @@
+<div align="center">
+
 # Alpha Market
 
 **One asset. Four jobs.**
 
-[![license](https://img.shields.io/badge/license-MIT-111111?style=flat-square&labelColor=2B2B2B)](LICENSE)
-[![solidity](https://img.shields.io/badge/solidity-0.8.28-111111?style=flat-square&labelColor=2B2B2B)](contracts/foundry.toml)
-[![tests](https://img.shields.io/badge/tests-206%20passing-111111?style=flat-square&labelColor=2B2B2B)](#testing)
-[![fuzz](https://img.shields.io/badge/fuzz-18%20invariants%20%C3%97%2050k-111111?style=flat-square&labelColor=2B2B2B)](#testing)
-[![chain](https://img.shields.io/badge/chain-Robinhood%20Chain-111111?style=flat-square&labelColor=2B2B2B)](https://explorer.testnet.chain.robinhood.com)
-[![settlement](https://img.shields.io/badge/settles%20in-5%20currencies-111111?style=flat-square&labelColor=2B2B2B)](#deployed-on-robinhood-chain-testnet-chainid-46630)
+[![license](https://img.shields.io/badge/license-MIT-E8E8E8?style=flat-square&labelColor=111111)](LICENSE)
+[![solidity](https://img.shields.io/badge/solidity-0.8.28-E8E8E8?style=flat-square&labelColor=111111)](contracts/foundry.toml)
+[![tests](https://img.shields.io/badge/tests-206%20passing-E8E8E8?style=flat-square&labelColor=111111)](#testing)
+[![fuzz](https://img.shields.io/badge/fuzz-18%20invariants%20%C3%97%2050k-E8E8E8?style=flat-square&labelColor=111111)](#testing)
+[![chain](https://img.shields.io/badge/chain-Robinhood%20Chain-E8E8E8?style=flat-square&labelColor=111111)](https://explorer.testnet.chain.robinhood.com)
+[![settlement](https://img.shields.io/badge/settles%20in-5%20currencies-E8E8E8?style=flat-square&labelColor=111111)](#deployed-on-robinhood-chain-testnet-chainid-46630)
 
 [Website](https://alphamarket.network) ·
 [Docs](https://alphamarket.network/docs) ·
 [API](https://api.alphamarket.network/config) ·
 [X](https://x.com/alphamarketnet) ·
 [Explorer](https://explorer.testnet.chain.robinhood.com)
+
+</div>
 
 ---
 
