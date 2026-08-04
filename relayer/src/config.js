@@ -46,6 +46,14 @@ export const config = {
   registry: deployed.registry,
   parlayFactory: deployed.parlayFactory || null,
   marginVault: deployed.marginVault || null,
+  // The lending vault replaces MarginVault: same proven floor, but funded by
+  // anyone and charging a rate that follows utilisation.
+  lendingVault: deployed.lendingVault || null,
+  interestModel: deployed.interestModel || null,
+  // A second curve, for the vaults that liquidate. Their ceiling sits higher
+  // because a punitive rate is useful where a position can genuinely go bad,
+  // and the interest reserve costs them less at a 30% or 15% LTV.
+  riskModel: deployed.riskModel || null,
   priceOracle: deployed.priceOracle || null,
   // Equity feeds live on mainnet, not on this testnet.
   mainnetRpc: env.RH_MAINNET_RPC || null,

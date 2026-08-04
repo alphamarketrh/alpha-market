@@ -47,6 +47,10 @@ export function loadPairs(deploymentsDir, chainId) {
         core: d.core,
         orderBook: d.orderBook || null,
         marginVault: d.marginVault || null,
+        lendingVault: d.lendingVault || null,
+        // A position in this currency securing a loan in another. Only some
+        // pairs have one, so a missing entry is normal rather than an error.
+        crossVaultToAUSD: d.crossVaultToAUSD || null,
         file: name,
       });
     } catch (e) {

@@ -1,5 +1,22 @@
 # Alpha Market
 
+**One asset. Four jobs.**
+
+[![license](https://img.shields.io/badge/license-MIT-111111?style=flat-square&labelColor=2B2B2B)](LICENSE)
+[![solidity](https://img.shields.io/badge/solidity-0.8.28-111111?style=flat-square&labelColor=2B2B2B)](contracts/foundry.toml)
+[![tests](https://img.shields.io/badge/tests-206%20passing-111111?style=flat-square&labelColor=2B2B2B)](#testing)
+[![fuzz](https://img.shields.io/badge/fuzz-18%20invariants%20%C3%97%2050k-111111?style=flat-square&labelColor=2B2B2B)](#testing)
+[![chain](https://img.shields.io/badge/chain-Robinhood%20Chain-111111?style=flat-square&labelColor=2B2B2B)](https://explorer.testnet.chain.robinhood.com)
+[![settlement](https://img.shields.io/badge/settles%20in-5%20currencies-111111?style=flat-square&labelColor=2B2B2B)](#deployed-on-robinhood-chain-testnet-chainid-46630)
+
+[Website](https://alphamarket.network) ·
+[Docs](https://alphamarket.network/docs) ·
+[API](https://api.alphamarket.network/config) ·
+[X](https://x.com/alphamarketnet) ·
+[Explorer](https://explorer.testnet.chain.robinhood.com)
+
+---
+
 A prediction market on **Robinhood Chain** where the question comes from
 Polymarket and the price does not.
 
@@ -14,9 +31,10 @@ On top sits the part that has no equivalent elsewhere: **three ways to borrow
 against a position, each priced by how much can actually be proven about what
 the collateral is worth.**
 
-**Status:** live and source-verified on testnet 46630. 173 contract tests, 13
-relayer tests, 13 fuzzed invariants at 50,000 runs each, and 7 end-to-end smoke
-scripts that run against the deployed contracts rather than a local simulator.
+**Status:** live at **[alphamarket.network](https://alphamarket.network)** on
+testnet 46630, settling in five currencies. 206 contract tests, 13 relayer
+tests, 18 fuzzed invariants at 50,000 runs each, and 7 end-to-end smoke scripts
+that run against the deployed contracts rather than a local simulator.
 
 ---
 
@@ -36,7 +54,7 @@ export REG=0x5ee116f6145158C395106AE6806b9FDa2bB94c9e
 cast send $AUSD "claim()" --rpc-url $RPC --private-key $PK
 
 # 2. see what is trading, in one call instead of thousands
-curl -s http://<relayer-host>:8420/book | jq '.markets[0]'
+curl -s https://api.alphamarket.network/book | jq '.markets[0]'
 
 # 3. buy YES at 0.62 for 1000 units, expiring in a day
 cast send $AUSD "approve(address,uint256)" $BOOK 1000000000 --rpc-url $RPC --private-key $PK
@@ -58,7 +76,7 @@ For ETH gas and stock tokens, use the official
 Everything follows from one question: **how much can be proven about what the
 collateral is worth?**
 
-| | `MarginVault` | `DirectionalVault` | `CrossVault` |
+| | `LendingVault` | `DirectionalVault` | `CrossVault` |
 |---|---|---|---|
 | Pledge | 1,000 YES **and** 1,000 NO | 1,000 YES **only** | 1,000 YES-TSLA |
 | Debt asset | same as the pledge | same as the pledge | **a different asset** |
@@ -67,6 +85,8 @@ collateral is worth?**
 | Price oracle | **none** | required | two required |
 | Liquidation | **never** | yes | yes |
 | Max LTV | 95% | 30% | 15% |
+| Rate ceiling | 30% | 60% | 60% |
+| Funded by | **anyone** | owner | owner |
 | Bad debt | **impossible** | possible | possible |
 
 A binary market has exactly three terminal states, so a hedged position can be
@@ -85,7 +105,7 @@ liquidate, and bad debt is arithmetically impossible rather than unlikely.
 The honest cost: a purely directional holder has a worst case of zero and
 borrows nothing there. That is most retail users, so `DirectionalVault` serves
 them with a price feed, a 30% LTV and a liquidation engine, and pays for it with
-every failure mode `MarginVault` avoids.
+every failure mode `LendingVault` avoids.
 
 `CrossVault` goes further and is priced accordingly. Collateral value is the
 **product** of two independent prices, so a 30% fall in each leaves 49% of the
@@ -111,16 +131,20 @@ A question resolves once. The registry is shared, and a separate core, order
 book and vault exist per settlement asset.
 
 ```
-                    MarketRegistry          one registry, one resolution
-                   /              \
-        AlphaMarketCore        AlphaMarketCore
-          (aUSD, 6dp)            (TSLA, 18dp)
-             |                       |
-        OrderBook               OrderBook       separate books, separate prices
-        MarginVault             MarginVault     both need no oracle
-        DirectionalVault        CrossVault ---> borrows aUSD against TSLA
-        ParlayFactory
+                        MarketRegistry        one registry, one resolution
+             /-------------+-------------\
+    AlphaMarketCore   AlphaMarketCore   AlphaMarketCore   ... AMZN, PLTR
+      (aUSD, 6dp)       (TSLA, 18dp)      (AMD, 18dp)
+          |                  |                 |
+     OrderBook          OrderBook         OrderBook    separate books, prices
+     LendingVault       LendingVault      LendingVault none needs an oracle
+     DirectionalVault   CrossVault -----> borrows aUSD against a TSLA position
+     ParlayFactory
 ```
+
+Five settlement currencies are live: aUSD, and the TSLA, AMD, AMZN and PLTR
+stock tokens the official faucet hands out. NFLX is issued by that faucet too
+and has no pair, because no Chainlink feed prices it.
 
 YES-aUSD and YES-TSLA on the same question are **different tokens with
 different books and different prices**, and that is correct: they are quoted in
@@ -143,21 +167,38 @@ forecast.
 | `TestDollar` | [`0x7Bb22D6F8B1b1d8799B21Baa94e6829a85F9ffA5`](https://explorer.testnet.chain.robinhood.com/address/0x7Bb22D6F8B1b1d8799B21Baa94e6829a85F9ffA5) | Settlement collateral with a public faucet |
 | `AlphaMarketCore` | [`0xc2E980AB433D4Ef2AA3d6139e05b4e82e81fd102`](https://explorer.testnet.chain.robinhood.com/address/0xc2E980AB433D4Ef2AA3d6139e05b4e82e81fd102) | Split / merge / redeem outcome tokens |
 | `OrderBook` | [`0xe91EF60A8036F0D2d5d12E9507f92A0B7Cf12464`](https://explorer.testnet.chain.robinhood.com/address/0xe91EF60A8036F0D2d5d12E9507f92A0B7Cf12464) | On-chain limit book, four ways to match |
-| `MarginVault` | [`0xD86A54c64e49c4158B20aa26D08fd4732B0A1c56`](https://explorer.testnet.chain.robinhood.com/address/0xD86A54c64e49c4158B20aa26D08fd4732B0A1c56) | Lends against a **proven** floor |
-| `DirectionalVault` | [`0xEF86596Ffe80C33839BFd6541Ea41DFe76719015`](https://explorer.testnet.chain.robinhood.com/address/0xEF86596Ffe80C33839BFd6541Ea41DFe76719015) | Lends against one side, oracle priced |
+| `LendingVault` | [`0x030c3baf8df11802e93de203dabeb690dd6f4e1a`](https://explorer.testnet.chain.robinhood.com/address/0x030c3baf8df11802e93de203dabeb690dd6f4e1a) | Lends against a **proven** floor, funded by anyone |
+| `InterestModel` | [`0x63290d3a5582c3657202487cfadabdc41e56fb9f`](https://explorer.testnet.chain.robinhood.com/address/0x63290d3a5582c3657202487cfadabdc41e56fb9f) | The rate curve, 30% ceiling |
+| `InterestModel` (risk) | [`0x251f6e4e0f7a0f2ce737bf11c68001ec9683f220`](https://explorer.testnet.chain.robinhood.com/address/0x251f6e4e0f7a0f2ce737bf11c68001ec9683f220) | The steeper curve, 60% ceiling |
+| `DirectionalVault` | [`0x26108683fea6956914362711818acfac1a56c718`](https://explorer.testnet.chain.robinhood.com/address/0x26108683fea6956914362711818acfac1a56c718) | Lends against one side, oracle priced |
 | `ParlayFactory` | [`0xd6B758a8db803bA684B4953129d618f3a4d0D1A6`](https://explorer.testnet.chain.robinhood.com/address/0xd6B758a8db803bA684B4953129d618f3a4d0D1A6) | Boolean combinations of markets |
 | `MirrorPositionOracle` | [`0x4f5a75964F128c0Cb709ea1B37C88be4E281C59e`](https://explorer.testnet.chain.robinhood.com/address/0x4f5a75964F128c0Cb709ea1B37C88be4E281C59e) | Outcome-token odds, swappable source |
 | `PriceOracle` | [`0xe04062cbab194cc2ac65618ddb606d9bdeaabdcb`](https://explorer.testnet.chain.robinhood.com/address/0xe04062cbab194cc2ac65618ddb606d9bdeaabdcb) | Equity prices, relayed from mainnet Chainlink |
 
-### TSLA, a second settlement currency
+### TSLA
 
 | Contract | Address |
 |---|---|
 | Stock token (faucet) | [`0xC9f9c86933092BbbfFF3CCb4b105A4A94bf3Bd4E`](https://explorer.testnet.chain.robinhood.com/address/0xC9f9c86933092BbbfFF3CCb4b105A4A94bf3Bd4E) |
 | `AlphaMarketCore` | [`0x7f6d15b0d9052579bd38463be1cdf6af75e8e2e6`](https://explorer.testnet.chain.robinhood.com/address/0x7f6d15b0d9052579bd38463be1cdf6af75e8e2e6) |
 | `OrderBook` | [`0xd7e7c86d8ba4f0aaae96bfe29415da9f2e9311c2`](https://explorer.testnet.chain.robinhood.com/address/0xd7e7c86d8ba4f0aaae96bfe29415da9f2e9311c2) |
-| `MarginVault` | [`0xa1a2c9d7048fc1c745d726477d42d02985ce28aa`](https://explorer.testnet.chain.robinhood.com/address/0xa1a2c9d7048fc1c745d726477d42d02985ce28aa) |
-| `CrossVault` (TSLA to aUSD) | [`0xfeb16fbc3578828ac65f788b2c3cca1f43a9e1e9`](https://explorer.testnet.chain.robinhood.com/address/0xfeb16fbc3578828ac65f788b2c3cca1f43a9e1e9) |
+| `LendingVault` | [`0x619ff428cf3eac697c8798bab45368a5dc40ab01`](https://explorer.testnet.chain.robinhood.com/address/0x619ff428cf3eac697c8798bab45368a5dc40ab01) |
+| `CrossVault` (TSLA to aUSD) | [`0x481ad32ccee2e3762b7467933f03c1bc92326f7d`](https://explorer.testnet.chain.robinhood.com/address/0x481ad32ccee2e3762b7467933f03c1bc92326f7d) |
+
+### AMD, AMZN and PLTR
+
+Deployed from the same bytecode: one core, book, lending vault and cross vault
+each. Every equity pair can secure an aUSD loan.
+
+| Currency | `AlphaMarketCore` | `OrderBook` | `LendingVault` | `CrossVault` |
+|---|---|---|---|---|
+| AMD | `0x5d67599a6065a490e8ef1c72e61a903169c2f95c` | `0x07fcf5406c8a2a6b312cdd07d7cce144a088b75e` | `0x9d8028019729adba13a39938e6eb8fc140bdf30f` | `0x79eed4e04878c82df42a622fd84eb454677ae908` |
+| AMZN | `0xd76142857f2f933eac4ed4ae384e435683b1f3c6` | `0xbbf7dd862e363c681f88a500354425c9dc1105dd` | `0xc7b70d0e672476514090356f09baaaed4e5be214` | `0xcaa23d695b2e99cde0362ddce1c993ed5215ab32` |
+| PLTR | `0xf201831b2042e27b2ac036eda78d6a314080dd91` | `0xd97b7b01817600915bc80de7335333c992c62293` | `0x3d6d169bf7dfd7b41e3e6bb6ca699be7d23c31db` | `0x3f5283a1ba203b7d3fe79c4501e0cf0d1cfb852d` |
+
+Adding a currency needed no contract change at all: the same bytecode, a
+different collateral address, and the relayer picks it up from a deployment file
+on its next cycle.
 
 All source-verified on Blockscout.
 
@@ -273,7 +314,26 @@ npm test                     # 13 unit tests
 |---|---|
 | `/config` | Every contract address, live. **The authoritative source.** |
 | `/markets` | Every mirrored market and its status |
-| `/book` | Open orders, best bid and ask, per settlement currency |
+| `/book` | Open orders, best bid and ask, per settlement currency, plus the question, image, category and event grouping |
+| `/rules` | The resolution rules for one market, fetched from upstream on demand |
+
+`/rules` is fetched rather than stored. Descriptions run to a thousand
+characters at the median and three thousand at the top, so keeping one on every
+market would roughly double a state file that is rewritten every cycle, to serve
+text that is only read when a single market is opened.
+
+`/book` also carries `eventId` and `eventTitle`, which group markets that are
+one question with different answers: nine candidates for a nomination, six
+strike prices on the same day. An interface can then show them as one card with
+rows instead of nine cards repeating a sentence.
+
+`/book` is served from a background refresh rather than read on demand. The
+public RPC rate limits, and a full sweep across five currencies took seventy-two
+seconds and returned 429s when parallelised harder. One refresh now runs at a
+pace the RPC tolerates and every request is answered from what it last produced,
+in about fifteen milliseconds. The response carries `builtMsAgo`, so a caller
+can see how far behind the head it is. Nothing that decides a transaction is
+read from it: a wallet reads balances and orders from chain directly.
 
 `/config` exists because addresses change whenever a contract with an immutable
 dependency is replaced, and a stale address fails **silently**: a call to a dead
@@ -337,8 +397,11 @@ Read from chain, not from memory.
 | Minimum source depth | 0, gate removed |
 | aUSD faucet | 10,000 per claim, 12 hour cooldown, 100M cap |
 | Order book fee | 20 bps, capped at 200 in code |
-| MarginVault haircut | 5% below the proven floor |
-| MarginVault rate | 15% APR, stops at market end |
+| LendingVault haircut | 5% below the proven floor |
+| LendingVault reserve | 10% of interest, held against loss |
+| Rate curve, hedged | 2% idle, 15% at the 80% kink, 30% at full |
+| Rate curve, risk | 3% idle, 12% at the 80% kink, 60% at full |
+| Rate ceilings | 30% hedged, 60% directional and cross. Immutable per vault |
 | DirectionalVault | 30% LTV, 50% liquidation, 8% bonus |
 | CrossVault | 15% LTV, 35% liquidation, 10% bonus |
 | Deadline buffer | 1 hour before resolution, both vaults |
@@ -353,7 +416,7 @@ Read from chain, not from memory.
 
 ```bash
 cd contracts
-forge test                                    # 173 tests
+forge test                                    # 206 tests
 FOUNDRY_PROFILE=deep forge test --match-test testFuzz   # 13 invariants, 50k runs
 
 cd ../relayer && npm test                     # 13 tests
@@ -364,7 +427,9 @@ cd ../relayer && npm test                     # 13 tests
 | `AlphaMarket.t.sol` | 27 | Core, registry, the fenced arbiter |
 | `OrderBook.t.sol` | 29 | Placement, all four match kinds, solvency |
 | `DirectionalVault.t.sol` | 26 | One-sided lending, deadline, absorb |
-| `MarginVault.t.sol` | 17 | The proven floor, settlement |
+| `LendingVault.t.sol` | 17 | The proven floor, supply shares, the moving rate |
+| `InterestModel.t.sol` | 16 | The rate curve and its bounds |
+| `MarginVault.t.sol` | 17 | The vault LendingVault replaced |
 | `CrossVault.t.sol` | 17 | Two-price collateral, cross-asset lending |
 | `ParlayFactory.t.sol` | 14 | Boolean combinations |
 | `Pause.t.sol` | 14 | Entry stops, **exit never does** |
@@ -403,8 +468,8 @@ Each asserts its final state and exits non-zero on failure.
 
 ```
 contracts/
-  src/            12 contracts + 2 interfaces
-  test/           11 suites, 173 tests
+  src/            14 contracts + 2 interfaces
+  test/           13 suites, 206 tests
   script/         7 deploy scripts
   deployments/    the addresses that matter, per chain and per pair
 relayer/
@@ -414,6 +479,8 @@ relayer/
 script/           7 end-to-end smoke tests
 research/         Stage 1 measurement against public Polymarket APIs
 ```
+
+The web interface lives in its own repository and is deployed separately.
 
 ## Build and deploy
 
@@ -460,11 +527,13 @@ Deliberate for a testnet milestone. **None may reach mainnet as-is.**
 - **Outcome odds come from Polymarket through a single writer.** The interface
   is swappable; once the book has real volume the source should be the book.
 - **`DirectionalVault` and `CrossVault` can accrue bad debt.** Both have passing
-  tests proving it. `MarginVault` cannot.
+  tests proving it. `LendingVault` cannot.
 - **The relayer is a single point of failure** for halting, disputing and price
   freshness. Outcome proposal is already permissionless and bonded.
 - **The owner is an EOA, not a multisig.**
-- **No frontend.** Everything is `cast` and the read API.
+- **Market questions and categories come from Polymarket** and are relayed
+  through a single service. A market whose upstream record disappears keeps the
+  text it last had.
 - **No external audit.**
 
 ## Build order
@@ -479,7 +548,7 @@ Deliberate for a testnet milestone. **None may reach mainnet as-is.**
 7. ~~On-chain order book~~
 8. ~~Multi-currency settlement~~
 9. ~~Cross-collateral lending~~
-10. Frontend
+10. ~~Web interface~~
 11. Decentralised dispute escalation
 
 ## License

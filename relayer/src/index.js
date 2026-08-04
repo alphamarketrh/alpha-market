@@ -14,7 +14,7 @@ import http from "node:http";
 import { config, loadState } from "./config.js";
 import { connect } from "./chain.js";
 import { runCycle, preflight } from "./relayer.js";
-import { bookSnapshot, marketList, configSnapshot } from "./api.js";
+import { bookSnapshot, marketList, configSnapshot, startBookRefresh, marketRules } from "./api.js";
 
 let health = { status: "starting", startedAt: new Date().toISOString() };
 
@@ -51,6 +51,15 @@ function serve(ctx) {
       }
     }
 
+    if (url.pathname === "/rules") {
+      try {
+        const id = url.searchParams.get("id");
+        if (!id) return json(res, 400, { error: "id required" });
+        return json(res, 200, await marketRules(id));
+      } catch (e) {
+        return json(res, 500, { error: String(e).slice(0, 200) });
+      }
+    }
     if (url.pathname === "/markets") {
       try {
         return json(res, 200, await marketList(ctx));
@@ -97,6 +106,9 @@ async function main() {
     return;
   }
 
+  // Build the book once at startup and keep it warm, so no request ever
+  // waits on a full sweep of the chain.
+  startBookRefresh(ctx);
   const server = serve(ctx);
   health.status = "running";
 

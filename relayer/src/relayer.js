@@ -10,6 +10,7 @@ import { matchOrderBook } from "./matcher.js";
 import { loadPairs, connectPairs, pairContext } from "./pairs.js";
 import {
   fetchActiveMarkets, fetchMarket, fetchDepth, readResolution, mapLimit,
+  fetchEvents,
 } from "./polymarket.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -125,6 +126,11 @@ async function trackExisting(ctx, state, summary) {
     const res = readResolution(src);
     rec.sourceState = res.state;
     rec.question = String(src.question || "").slice(0, 90);
+    // Backfills markets registered before the metadata was kept.
+    if (src.image || src.icon) rec.image = String(src.image || src.icon).slice(0, 300);
+    if (src.slug) rec.slug = String(src.slug).slice(0, 120);
+    if (src.groupItemTitle) rec.groupItemTitle = String(src.groupItemTitle).slice(0, 60);
+    if (src.volume != null) rec.volumeUsd = Number(src.volume) || 0;
 
     // 1. halt as soon as upstream starts resolving
     if (res.state !== "open" && status === 1) {
@@ -271,9 +277,12 @@ async function discoverNew(ctx, state, summary) {
     const endMs = Date.parse(m.endDate || "");
     if (!Number.isFinite(endMs)) { rejected.noEnd++; continue; }
     const endTime = Math.floor(endMs / 1000);
-    // A market resolving within a day cannot support a loan that must mature
-    // before resolution, and leaves no room to react to upstream changes.
-    if (endTime - nowS < 86400) { rejected.tooSoon++; continue; }
+    // A loan must mature before resolution, and the vaults set that deadline
+    // one hour ahead. Six hours leaves room for that plus several relayer
+    // cycles to react to an upstream change. Twenty four hours was arbitrary
+    // and rejected almost every sports market, which is where the day to day
+    // volume actually is.
+    if (endTime - nowS < 21600) { rejected.tooSoon++; continue; }
     cheap.push({ m, id, endTime });
   }
 
@@ -309,8 +318,44 @@ async function discoverNew(ctx, state, summary) {
     if (config.live) {
       await send(`initializeMarket ${id.slice(0, 10)}`, ctx.core.initializeMarket, id);
     }
+    // Tags belong to the event, and the event id arrives with the market, so
+    // the category costs one batched call rather than one call per market.
+    // An event groups several markets that are really one question with
+    // different answers: nine candidates for a nomination, six strike prices
+    // on the same day. Keeping the event title and image lets those be shown
+    // as one card with rows, which is what they are, instead of nine cards
+    // repeating the same sentence.
+    const evId = (m.events || [])[0]?.id;
+    let tags = [];
+    let eventTitle = null;
+    let eventImage = null;
+    if (evId) {
+      try {
+        const ev = (await fetchEvents([String(evId)]))[String(evId)];
+        if (ev) {
+          tags = ev.tags || [];
+          eventTitle = ev.title;
+          eventImage = ev.image;
+        }
+      } catch { /* missing grouping must not block registration */ }
+    }
+
     state.markets[id] = {
       id, question: String(m.question || "").slice(0, 90),
+      eventId: evId ? String(evId) : null,
+      eventTitle,
+      eventImage,
+      // The short label for this market's row, e.g. "62,000" under
+      // "Bitcoin above ___ on August 4?". Absent on standalone markets.
+      groupItemTitle: String(m.groupItemTitle || "").slice(0, 60) || null,
+      tags,
+      // Polymarket returns an image, a slug and a volume alongside the
+      // question. The relayer already fetches all of it every cycle to decide
+      // what to register, so keeping it costs nothing and is what lets a
+      // market appear as something a person recognises rather than a hash.
+      image: String(m.image || m.icon || "").slice(0, 300) || null,
+      slug: String(m.slug || "").slice(0, 120) || null,
+      volumeUsd: Number(m.volume || 0) || 0,
       endTime, depthUsd: usd, lastReportedDepth: usd,
       registeredAt: new Date().toISOString(),
     };

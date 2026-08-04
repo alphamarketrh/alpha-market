@@ -7,6 +7,7 @@ import {MarketRegistry} from "../src/MarketRegistry.sol";
 import {AlphaMarketCore} from "../src/AlphaMarketCore.sol";
 import {MirrorPositionOracle} from "../src/MirrorPositionOracle.sol";
 import {DirectionalVault} from "../src/DirectionalVault.sol";
+import {InterestModel} from "../src/InterestModel.sol";
 import {OutcomeToken} from "../src/OutcomeToken.sol";
 import {MarketTypes} from "../src/types/MarketTypes.sol";
 
@@ -18,6 +19,7 @@ contract DirectionalVaultTest is Test {
     AlphaMarketCore core;
     MirrorPositionOracle oracle;
     DirectionalVault vault;
+    InterestModel model;
 
     address relayer = makeAddr("relayer");
     address alice = makeAddr("alice");
@@ -43,7 +45,12 @@ contract DirectionalVaultTest is Test {
         core = new AlphaMarketCore(address(usdg), address(registry));
         // maxMoveBps wide open here; a dedicated test covers the guard
         oracle = new MirrorPositionOracle(address(registry), 1 hours, 10_000);
-        vault = new DirectionalVault(address(core), address(oracle));
+        // 3% at rest, 12% at the 80% kink, 60% at full. Dearer than the
+        // hedged vault at rest because this loan carries real risk, and
+        // steeper past the kink because here liquidity defends a position
+        // that can actually go bad.
+        model = new InterestModel(300, 900, 4800, 8000);
+        vault = new DirectionalVault(address(core), address(oracle), address(model), 6000);
 
         registry.setRelayer(relayer, true);
         oracle.setWriter(writer, true);
@@ -79,7 +86,16 @@ contract DirectionalVaultTest is Test {
     function test_DirectionalPledge_HasBorrowPower() public {
         _pledge(1_000e6);
         assertEq(vault.positionValue(MID, alice), 600e6, "1000 YES at 0.60");
-        assertEq(vault.borrowLimit(MID, alice), 180e6, "30% LTV");
+        // The LTV line is still 30%, but the borrow limit sits under it: it
+        // also holds back the interest that could accrue before resolution,
+        // priced at the ceiling rather than at today's rate. Derived here
+        // rather than pasted, so it stays true if a parameter moves.
+        assertEq(vault.staticLimit(MID, alice), 180e6, "30% LTV");
+        uint256 remaining = vault.deadlineOf(MID) - block.timestamp;
+        uint256 expected = (uint256(180e6) * 365 days * 10_000)
+            / (365 days * 10_000 + vault.rateCeilingBps() * remaining);
+        assertEq(vault.borrowLimit(MID, alice), expected, "less the interest reserve");
+        assertLt(vault.borrowLimit(MID, alice), 180e6, "the reserve is real");
         assertEq(vault.liquidationLimit(MID, alice), 300e6, "50% threshold");
         assertGt(vault.availableToBorrow(MID, alice), 0);
     }
@@ -87,28 +103,40 @@ contract DirectionalVaultTest is Test {
     function test_Borrow_UpToLimit() public {
         _pledge(1_000e6);
         uint256 before = usdg.balanceOf(alice);
+        uint256 lim = vault.availableToBorrow(MID, alice);
         vm.prank(alice);
-        vault.borrow(MID, 180e6);
-        assertEq(usdg.balanceOf(alice) - before, 180e6);
-        assertEq(vault.debtOf(MID, alice), 180e6);
-        assertEq(vault.healthBps(MID, alice), 16_666, "300/180");
+        vault.borrow(MID, lim);
+        assertEq(usdg.balanceOf(alice) - before, lim);
+        assertEq(vault.debtOf(MID, alice), lim);
+        assertEq(vault.healthBps(MID, alice), (300e6 * 10_000) / lim, "threshold over debt");
     }
 
     function test_Borrow_RevertsAboveLimit() public {
         _pledge(1_000e6);
+        // The limit rises very slightly as time passes, because the interest
+        // it reserves is for a shrinking remainder. Asking for one unit more
+        // than the limit read a moment ago can therefore still be allowed, so
+        // the test pushes past the LTV line itself, which does not move.
+        uint256 lim = vault.borrowLimit(MID, alice);
+        uint256 tooMuch = vault.staticLimit(MID, alice) + 1;
+        assertLt(lim, tooMuch - 1, "the reserve is real");
+
+        // The argument is computed first on purpose: expectRevert applies to
+        // the next call, and reading a view to build an argument is a call.
         vm.prank(alice);
         vm.expectRevert();
-        vault.borrow(MID, 181e6);
+        vault.borrow(MID, tooMuch);
     }
 
     // -------------------------------------------------- scenario A: repaid
 
     function test_ScenarioA_Repaid() public {
-        _borrow(1_000e6, 180e6);
+        _borrow(1_000e6, type(uint256).max);
+        uint256 drawn = vault.debtOf(MID, alice);
         vm.warp(block.timestamp + 25 days);
 
         uint256 debt = vault.debtOf(MID, alice);
-        assertGt(debt, 180e6, "interest accrued");
+        assertGt(debt, drawn, "interest accrued");
 
         vm.startPrank(alice);
         vault.repay(MID, type(uint256).max);
@@ -123,40 +151,45 @@ contract DirectionalVaultTest is Test {
     // ---------------------------------------------- scenario B: price falls
 
     function test_ScenarioB_PriceFall_Liquidation() public {
-        _borrow(1_000e6, 180e6);
+        _borrow(1_000e6, type(uint256).max);
         _px(PX30);
 
         assertEq(vault.positionValue(MID, alice), 300e6);
         assertEq(vault.liquidationLimit(MID, alice), 150e6);
         assertLt(vault.healthBps(MID, alice), 10_000, "now liquidatable");
 
+        uint256 debt = vault.debtOf(MID, alice);
+        uint256 half = debt / 2;
         uint256 k0 = yes.balanceOf(keeper);
         vm.prank(keeper);
-        vault.liquidate(MID, alice, 90e6);
+        vault.liquidate(MID, alice, half);
         uint256 seized = yes.balanceOf(keeper) - k0;
 
-        // 90 USDG at 0.30 = 300 YES, plus 8% bonus = 324 YES
-        assertEq(seized, 324e6, "seized with 8% bonus");
-        assertApproxEqAbs(vault.debtOf(MID, alice), 90e6, 1e3, "half the debt closed");
+        // Repaying at 0.30 buys half/0.30 shares, plus the 8% bonus. Derived
+        // from the debt rather than pasted, so it survives a parameter change.
+        uint256 expected = (half * 1e6 / PX30) * (10_000 + 800) / 10_000;
+        assertApproxEqAbs(seized, expected, 1e4, "seized with 8% bonus");
+        assertApproxEqAbs(vault.debtOf(MID, alice), debt - half, 1e3, "half the debt closed");
 
         DirectionalVault.Position memory p = vault.positionOf(MID, alice);
-        assertEq(p.yesAmount, 676e6, "user keeps the rest");
+        assertApproxEqAbs(p.yesAmount, 1_000e6 - seized, 1e4, "user keeps the rest");
         assertGt(vault.healthBps(MID, alice), 10_000, "healthy again");
     }
 
     function test_Liquidate_RevertsWhileHealthy() public {
-        _borrow(1_000e6, 180e6);
+        _borrow(1_000e6, type(uint256).max);
         vm.prank(keeper);
         vm.expectRevert();
         vault.liquidate(MID, alice, 50e6);
     }
 
     function test_Liquidate_CloseFactorCaps() public {
-        _borrow(1_000e6, 180e6);
+        _borrow(1_000e6, type(uint256).max);
         _px(PX30);
+        uint256 debt = vault.debtOf(MID, alice);
         vm.prank(keeper);
-        vault.liquidate(MID, alice, 180e6);
-        assertApproxEqAbs(vault.debtOf(MID, alice), 90e6, 1e3, "only 50% closable");
+        vault.liquidate(MID, alice, debt);
+        assertApproxEqAbs(vault.debtOf(MID, alice), debt / 2, 1e3, "only 50% closable");
     }
 
     // ------------------------------------------- scenario C: deadline hit
@@ -165,7 +198,7 @@ contract DirectionalVaultTest is Test {
     ///         in one block, so the loan must be closed before that point
     ///         whether or not the position looks healthy.
     function test_ScenarioC_DeadlineOpensLiquidation() public {
-        _borrow(1_000e6, 180e6);
+        _borrow(1_000e6, type(uint256).max);
         assertGt(vault.healthBps(MID, alice), 10_000, "healthy at 0.60");
 
         vm.warp(vault.deadlineOf(MID) + 1);
@@ -175,7 +208,11 @@ contract DirectionalVaultTest is Test {
         // close factor is 100% past the deadline
         vm.prank(keeper);
         vault.liquidate(MID, alice, type(uint256).max);
-        assertEq(vault.debtOf(MID, alice), 0, "fully closed");
+        // Seizure floors in the vault's favour, so the value taken lands just
+        // under the target and the repayment is scaled down to match. What is
+        // left is a rounding artefact of a couple of units, not a shortfall
+        // that grows with size.
+        assertLt(vault.debtOf(MID, alice), 100, "only rounding dust remains");
     }
 
     function test_Borrow_RevertsPastDeadline() public {
@@ -187,7 +224,7 @@ contract DirectionalVaultTest is Test {
     }
 
     function test_Interest_StopsAtDeadline() public {
-        _borrow(1_000e6, 180e6);
+        _borrow(1_000e6, type(uint256).max);
         vm.warp(vault.deadlineOf(MID));
         uint256 atDeadline = vault.debtOf(MID, alice);
         vm.warp(vault.deadlineOf(MID) + 30 days);
@@ -197,7 +234,7 @@ contract DirectionalVaultTest is Test {
     // ------------------------------------------ scenario D: no liquidator
 
     function test_ScenarioD_AbsorbThenSweep_Wins() public {
-        _borrow(1_000e6, 180e6);
+        _borrow(1_000e6, type(uint256).max);
         _px(PX30);
         vm.warp(vault.deadlineOf(MID) + 1);
 
@@ -214,7 +251,7 @@ contract DirectionalVaultTest is Test {
     }
 
     function test_ScenarioD_AbsorbThenSweep_Loses() public {
-        _borrow(1_000e6, 180e6);
+        _borrow(1_000e6, type(uint256).max);
         _px(PX30);
         vm.warp(vault.deadlineOf(MID) + 1);
         vault.absorb(MID, alice);
@@ -228,13 +265,13 @@ contract DirectionalVaultTest is Test {
     }
 
     function test_Absorb_RevertsBeforeDeadline() public {
-        _borrow(1_000e6, 180e6);
+        _borrow(1_000e6, type(uint256).max);
         vm.expectRevert();
         vault.absorb(MID, alice);
     }
 
     function test_Absorb_OnlyOwner() public {
-        _borrow(1_000e6, 180e6);
+        _borrow(1_000e6, type(uint256).max);
         vm.warp(vault.deadlineOf(MID) + 1);
         vm.prank(keeper);
         vm.expectRevert();
@@ -245,7 +282,7 @@ contract DirectionalVaultTest is Test {
     ///         seizing needs a price. absorb() is the designed escape hatch and
     ///         deliberately needs no oracle at all.
     function test_StaleAtDeadline_ForcesAbsorbPath() public {
-        _borrow(1_000e6, 180e6);
+        _borrow(1_000e6, type(uint256).max);
         vm.warp(vault.deadlineOf(MID) + 1);   // price is now far past maxAge
 
         vm.prank(keeper);
@@ -261,7 +298,8 @@ contract DirectionalVaultTest is Test {
     ///         used the deadline cutoff, so the stored debt silently outgrew
     ///         the quoted one after the deadline.
     function test_Interest_StateMatchesViewPastDeadline() public {
-        _borrow(1_000e6, 180e6);
+        _borrow(1_000e6, type(uint256).max);
+        uint256 drawn = vault.debtOf(MID, alice);
         vm.warp(vault.deadlineOf(MID) + 10 days);
 
         uint256 quoted = vault.debtOf(MID, alice);
@@ -271,14 +309,14 @@ contract DirectionalVaultTest is Test {
 
         DirectionalVault.Position memory p = vault.positionOf(MID, alice);
         assertEq(p.principal, 0, "no hidden residue");
-        assertGt(quoted, 180e6);
+        assertGt(quoted, drawn, "interest ran up to the deadline");
     }
 
     // ------------------------------------------------------- safety net
 
     /// @notice A missed liquidation must not strand collateral forever.
     function test_SettleResolved_ReturnsSurplus() public {
-        _borrow(1_000e6, 180e6);
+        _borrow(1_000e6, type(uint256).max);
         _resolve(MarketTypes.Outcome.Yes);
 
         uint256 debt = vault.debtOf(MID, alice);
@@ -290,7 +328,7 @@ contract DirectionalVaultTest is Test {
     }
 
     function test_SettleResolved_LosingSideRecordsBadDebt() public {
-        _borrow(1_000e6, 180e6);
+        _borrow(1_000e6, type(uint256).max);
         _resolve(MarketTypes.Outcome.No);
         vault.settleResolved(MID, alice);
         assertGt(vault.badDebt(), 0, "unbacked residual is recorded");
@@ -301,7 +339,7 @@ contract DirectionalVaultTest is Test {
     // ----------------------------------------------------------- risk caps
 
     function test_MarketDebtCap_Enforced() public {
-        vault.setRisk(1500, 100_000e6, 1 hours, 100e6);
+        vault.setRisk(100_000e6, 1 hours, 100e6);
         _pledge(1_000e6);
         vm.startPrank(alice);
         vault.borrow(MID, 100e6);
@@ -311,7 +349,7 @@ contract DirectionalVaultTest is Test {
     }
 
     function test_Unpledge_RevertsIfItBreaksTheLimit() public {
-        _borrow(1_000e6, 180e6);
+        _borrow(1_000e6, type(uint256).max);
         vm.prank(alice);
         vm.expectRevert();
         vault.unpledge(MID, 500e6, 0);
@@ -370,7 +408,7 @@ contract DirectionalVaultTest is Test {
     ///         boundary exactly where the parameters say it is.
     function testFuzz_HealthTracksPrice(uint32 pxRaw) public {
         uint256 px = uint256(pxRaw) % (ONE - 2) + 1;
-        _borrow(1_000e6, 180e6);
+        _borrow(1_000e6, type(uint256).max);
         _px(px);
 
         uint256 value = (1_000e6 * px) / ONE;
@@ -394,8 +432,13 @@ contract DirectionalVaultTest is Test {
         vm.stopPrank();
     }
 
+    /// @dev A debt of uint256 max means the most the vault will lend right
+    ///      now. Naming a figure would have to change every time a parameter
+    ///      does, and a test that quietly stops exercising the limit is worse
+    ///      than one that fails.
     function _borrow(uint256 amount, uint256 debt) internal {
         _pledge(amount);
+        if (debt == type(uint256).max) debt = vault.availableToBorrow(MID, alice);
         vm.prank(alice);
         vault.borrow(MID, debt);
     }

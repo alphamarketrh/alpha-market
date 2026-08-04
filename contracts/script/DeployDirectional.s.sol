@@ -31,7 +31,11 @@ contract DeployDirectional is Script {
         vm.startBroadcast(pk);
         MirrorPositionOracle oracle = new MirrorPositionOracle(registry, maxAge, maxMove);
         oracle.setWriter(writer, true);
-        DirectionalVault vault = new DirectionalVault(core, address(oracle));
+        // 60% ceiling. Unlike the hedged vault this one liquidates, so a
+        // punitive rate is useful and the roof can sit higher: at a 30% LTV
+        // the reservation costs about four points on a ninety day market.
+        address model = vm.envAddress("INTEREST_MODEL");
+        DirectionalVault vault = new DirectionalVault(core, address(oracle), model, 6000);
         if (seed > 0) {
             IERC20(coll).approve(address(vault), seed);
             vault.fund(seed);

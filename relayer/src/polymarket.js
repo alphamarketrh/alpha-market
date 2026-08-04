@@ -31,13 +31,23 @@ function jparse(v) {
  * returns an unfiltered page instead of an error. Never assume a filter applied
  * without checking the returned rows.
  */
+/**
+ * Candidate markets, ordered by what is trading now rather than what has ever
+ * traded.
+ *
+ * Lifetime volume concentrates on a handful of old questions: measured
+ * 2026-08-03, sixty markets ordered that way came from eleven distinct events,
+ * almost all US election derivatives. The same sixty ordered by 24 hour volume
+ * came from forty-six events across sports, politics, esports and crypto.
+ * Ordering by liquidity was worse still at four.
+ */
 export async function fetchActiveMarkets(limit = config.scanLimit) {
   const out = [];
   let offset = 0;
   while (out.length < limit) {
     const page = Math.min(100, limit - out.length);
     const url = `${config.gamma}/markets?active=true&closed=false&archived=false` +
-                `&limit=${page}&offset=${offset}&order=volumeNum&ascending=false`;
+                `&limit=${page}&offset=${offset}&order=volume24hr&ascending=false`;
     const { ok, body } = await get(url);
     if (!ok || !Array.isArray(body) || body.length === 0) break;
     out.push(...body);
@@ -61,6 +71,49 @@ export async function fetchMarket(conditionId) {
   r = await get(`${config.gamma}/markets?condition_ids=${conditionId}&closed=true`);
   if (r.ok && Array.isArray(r.body) && r.body.length) return r.body[0];
   return null;
+}
+
+/**
+ * Category tags for a batch of events.
+ *
+ * Tags live on the event, not on the market, so a market carries only an event
+ * id and the labels have to be fetched separately. The endpoint accepts many
+ * ids per request, verified at twenty, so the whole registry costs a handful of
+ * calls rather than one per market.
+ *
+ * Polymarket mixes real categories with internal bookkeeping in the same list:
+ * Politics and Sports sit next to Hide From New and Parent For Derivative.
+ * Filtering is left to the caller, because what counts as internal is a
+ * judgement about presentation rather than a property of the data.
+ */
+export async function fetchEvents(eventIds) {
+  const out = {};
+  for (let i = 0; i < eventIds.length; i += 20) {
+    const batch = eventIds.slice(i, i + 20);
+    const qs = batch.map((id) => `id=${encodeURIComponent(id)}`).join("&");
+    const r = await get(`${config.gamma}/events?${qs}`);
+    if (r.ok && Array.isArray(r.body)) {
+      for (const ev of r.body) {
+        out[String(ev.id)] = {
+          title: String(ev.title || "").slice(0, 120) || null,
+          image: String(ev.image || ev.icon || "").slice(0, 300) || null,
+          tags: (ev.tags || [])
+            .map((t) => (typeof t === "string" ? t : t?.label))
+            .filter(Boolean),
+        };
+      }
+    }
+    if (i + 20 < eventIds.length) await sleep(config.apiDelayMs);
+  }
+  return out;
+}
+
+/// Kept for callers that only want the labels.
+export async function fetchEventTags(eventIds) {
+  const evs = await fetchEvents(eventIds);
+  const out = {};
+  for (const [id, e] of Object.entries(evs)) out[id] = e.tags;
+  return out;
 }
 
 /**

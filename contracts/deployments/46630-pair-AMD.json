@@ -1,0 +1,16 @@
+{
+  "symbol": "AMD",
+  "decimals": 18,
+  "collateral": "0x71178BAc73cBeb415514eB542a8995b82669778d",
+  "registry": "0x5ee116f6145158C395106AE6806b9FDa2bB94c9e",
+  "core": "0x5d67599a6065a490e8ef1c72e61a903169c2f95c",
+  "orderBook": "0x07fcf5406c8a2a6b312cdd07d7cce144a088b75e",
+  "marginVault": "0x9d8028019729adba13a39938e6eb8fc140bdf30f",
+  "bookFeeBps": 20,
+  "note": "settlement in AMD. MarginVault needs no oracle: min(YES,NO) is a proven floor in any unit.",
+  "lendingVault": "0xb256b68b4f3d4b1b924c72dd3df16e3aee74efff",
+  "interestModel": "0x63290d3a5582c3657202487cfadabdc41e56fb9f",
+  "crossVaultToAUSD": "0x79eed4e04878c82df42a622fd84eb454677ae908",
+  "riskModel": "0x251f6e4e0f7a0f2ce737bf11c68001ec9683f220",
+  "crossVaultNote": "borrow aUSD against a position settled in this equity. LTV 15% and liquidation at 35%, lower than the single-price vaults because collateral value is the product of two moving prices."
+}

@@ -1,0 +1,16 @@
+{
+  "symbol": "PLTR",
+  "decimals": 18,
+  "collateral": "0x1FBE1a0e43594b3455993B5dE5Fd0A7A266298d0",
+  "registry": "0x5ee116f6145158C395106AE6806b9FDa2bB94c9e",
+  "core": "0xf201831b2042e27b2ac036eda78d6a314080dd91",
+  "orderBook": "0xd97b7b01817600915bc80de7335333c992c62293",
+  "marginVault": "0x3d6d169bf7dfd7b41e3e6bb6ca699be7d23c31db",
+  "bookFeeBps": 20,
+  "note": "settlement in PLTR. MarginVault needs no oracle: min(YES,NO) is a proven floor in any unit.",
+  "lendingVault": "0xc8348d66b054dd16ce44c943270243c2317199c7",
+  "interestModel": "0x63290d3a5582c3657202487cfadabdc41e56fb9f",
+  "crossVaultToAUSD": "0x3f5283a1ba203b7d3fe79c4501e0cf0d1cfb852d",
+  "riskModel": "0x251f6e4e0f7a0f2ce737bf11c68001ec9683f220",
+  "crossVaultNote": "borrow aUSD against a position settled in this equity. LTV 15% and liquidation at 35%, lower than the single-price vaults because collateral value is the product of two moving prices."
+}

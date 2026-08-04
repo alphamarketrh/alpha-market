@@ -68,6 +68,23 @@ export const BOOK_ABI = [
   "function feesAccrued() view returns (uint256)",
 ];
 
+// Read-only. The relayer never borrows, supplies or settles: it reports.
+export const LENDING_ABI = [
+  "function totalSupplied() view returns (uint256)",
+  "function totalPrincipal() view returns (uint256)",
+  "function reserveBalance() view returns (uint256)",
+  "function availableLiquidity() view returns (uint256)",
+  "function utilisation() view returns (uint256)",
+  "function borrowRate() view returns (uint256)",
+  "function supplyRate() view returns (uint256)",
+  "function rateCeilingBps() view returns (uint256)",
+  "function haircutBps() view returns (uint256)",
+  "function reserveBps() view returns (uint256)",
+  "function deadlineBuffer() view returns (uint64)",
+  "function maxDebtPerMarket() view returns (uint256)",
+  "function entryPaused() view returns (bool)",
+];
+
 export const CORE_ABI = [
   "function initializeMarket(bytes32 id) returns (address,address)",
   "function tokensOf(bytes32 id) view returns (address,address)",
@@ -76,10 +93,17 @@ export const CORE_ABI = [
 // The testnet collateral carries a public faucet on top of ERC20. Reading
 // those fields is what lets /config tell a newcomer how to obtain a balance.
 export const COLLATERAL_ABI = [
+  // ERC20. approve and allowance are what let the relayer post a resolution
+  // bond, so dropping them silently disables proposing and disputing.
   "function symbol() view returns (string)",
   "function decimals() view returns (uint8)",
   "function totalSupply() view returns (uint256)",
   "function balanceOf(address) view returns (uint256)",
+  "function allowance(address,address) view returns (uint256)",
+  "function approve(address,uint256) returns (bool)",
+  "function transfer(address,uint256) returns (bool)",
+  // The testnet collateral adds a public faucet on top, which is what /config
+  // reads to tell a newcomer how to obtain a balance.
   "function claimAmount() view returns (uint256)",
   "function cooldown() view returns (uint256)",
   "function supplyCap() view returns (uint256)",
@@ -118,6 +142,9 @@ export function connect() {
       : null,
     positionOracle: config.positionOracle
       ? new ethers.Contract(config.positionOracle, POSITION_ORACLE_ABI, wallet)
+      : null,
+    lending: config.lendingVault
+      ? new ethers.Contract(config.lendingVault, LENDING_ABI, wallet)
       : null,
     book: config.orderBook
       ? new ethers.Contract(config.orderBook, BOOK_ABI, wallet)

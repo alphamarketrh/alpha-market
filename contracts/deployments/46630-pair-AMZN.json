@@ -1,0 +1,16 @@
+{
+  "symbol": "AMZN",
+  "decimals": 18,
+  "collateral": "0x5884aD2f920c162CFBbACc88C9C51AA75eC09E02",
+  "registry": "0x5ee116f6145158C395106AE6806b9FDa2bB94c9e",
+  "core": "0xd76142857f2f933eac4ed4ae384e435683b1f3c6",
+  "orderBook": "0xbbf7dd862e363c681f88a500354425c9dc1105dd",
+  "marginVault": "0xc7b70d0e672476514090356f09baaaed4e5be214",
+  "bookFeeBps": 20,
+  "note": "settlement in AMZN. MarginVault needs no oracle: min(YES,NO) is a proven floor in any unit.",
+  "lendingVault": "0x501f62b42aa43b868437bf89db0107f76e911f9a",
+  "interestModel": "0x63290d3a5582c3657202487cfadabdc41e56fb9f",
+  "crossVaultToAUSD": "0xcaa23d695b2e99cde0362ddce1c993ed5215ab32",
+  "riskModel": "0x251f6e4e0f7a0f2ce737bf11c68001ec9683f220",
+  "crossVaultNote": "borrow aUSD against a position settled in this equity. LTV 15% and liquidation at 35%, lower than the single-price vaults because collateral value is the product of two moving prices."
+}

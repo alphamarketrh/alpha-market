@@ -7,6 +7,7 @@ import {MockStock} from "./mocks/MockStock.sol";
 import {MarketRegistry} from "../src/MarketRegistry.sol";
 import {AlphaMarketCore} from "../src/AlphaMarketCore.sol";
 import {CrossVault} from "../src/CrossVault.sol";
+import {InterestModel} from "../src/InterestModel.sol";
 import {MirrorPositionOracle} from "../src/MirrorPositionOracle.sol";
 import {PriceOracle} from "../src/PriceOracle.sol";
 import {OutcomeToken} from "../src/OutcomeToken.sol";
@@ -23,6 +24,7 @@ contract CrossVaultTest is Test {
     MirrorPositionOracle odds;
     PriceOracle equity;
     CrossVault vault;
+    InterestModel model;
 
     address relayer = makeAddr("relayer");
     address writer = makeAddr("writer");
@@ -48,8 +50,13 @@ contract CrossVaultTest is Test {
         core = new AlphaMarketCore(address(tsla), address(registry));
         odds = new MirrorPositionOracle(address(registry), 1 hours, 10_000);
         equity = new PriceOracle(3 days);
+        // 3% at rest, 12% at the 80% kink, 60% at full. This vault
+        // liquidates, so a punitive rate is useful and the ceiling can sit
+        // higher than the hedged vault's: at a 15% LTV the interest reserve
+        // costs about two points on a ninety day market.
+        model = new InterestModel(300, 900, 4800, 8000);
         vault = new CrossVault(address(core), address(aUSD), 6, 18,
-            address(odds), address(equity));
+            address(odds), address(equity), address(model), 6000);
 
         registry.setRelayer(relayer, true);
         odds.setWriter(writer, true);
@@ -67,7 +74,7 @@ contract CrossVaultTest is Test {
         vm.prank(writer);
         odds.writePrice(MID, ODDS_60);
 
-        vault.setRisk(1500, 1_000_000e6, 1 hours, 500_000e6);
+        vault.setRisk(1_000_000e6, 1 hours, 500_000e6);
 
         address[3] memory who = [alice, keeper, proposer];
         for (uint256 i = 0; i < who.length; i++) {
@@ -95,7 +102,17 @@ contract CrossVaultTest is Test {
         // 1000 YES at 0.60 odds = 600 TSLA, at $309.40 = $185,641.53
         uint256 v = vault.positionValue(MID, alice);
         assertApproxEqAbs(v, 185_641_530_000, 1e6, "600 TSLA priced in aUSD");
-        assertEq(vault.borrowLimit(MID, alice), (v * 1500) / 10_000, "15% LTV");
+        assertEq(vault.staticLimit(MID, alice), (v * 1500) / 10_000, "15% LTV");
+
+        // The borrow limit sits under that line: it also holds back the
+        // interest that could accrue before resolution, priced at the ceiling
+        // rather than at today's rate. Derived rather than pasted, so it stays
+        // true if a parameter moves.
+        uint256 remaining = vault.deadlineOf(MID) - block.timestamp;
+        uint256 expected = ((v * 1500) / 10_000) * 365 days * 10_000
+            / (365 days * 10_000 + vault.rateCeilingBps() * remaining);
+        assertEq(vault.borrowLimit(MID, alice), expected, "less the interest reserve");
+        assertLt(vault.borrowLimit(MID, alice), (v * 1500) / 10_000, "the reserve is real");
         assertEq(vault.liquidationLimit(MID, alice), (v * 3500) / 10_000, "35% threshold");
     }
 

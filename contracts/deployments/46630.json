@@ -18,7 +18,7 @@
   "facilityCap": 100000000000,
   "parlayFactory": "0xd6B758a8db803bA684B4953129d618f3a4d0D1A6",
   "positionOracle": "0x4f5a75964F128c0Cb709ea1B37C88be4E281C59e",
-  "directionalVault": "0xEF86596Ffe80C33839BFd6541Ea41DFe76719015",
+  "directionalVault": "0x26108683fea6956914362711818acfac1a56c718",
   "priceWriter": "0xAca9c51F0015e57f2070a2D068e9E0442CB94577",
   "orderBook": "0xe91EF60A8036F0D2d5d12E9507f92A0B7Cf12464",
   "bookFeeBps": 20,
@@ -26,5 +26,8 @@
   "guardian": "0x35bEFA8b5f72D4B9F4cA3E7A227f82B8F26BED44",
   "priceOracle": "0xe04062cbab194cc2ac65618ddb606d9bdeaabdcb",
   "pricePusher": "0xAca9c51F0015e57f2070a2D068e9E0442CB94577",
-  "equityVaultStatus": "equity prices are relayed from Chainlink on mainnet 4663; chain 46630 has no equity feeds of its own"
+  "equityVaultStatus": "equity prices are relayed from Chainlink on mainnet 4663; chain 46630 has no equity feeds of its own",
+  "lendingVault": "0x030c3baf8df11802e93de203dabeb690dd6f4e1a",
+  "interestModel": "0x63290d3a5582c3657202487cfadabdc41e56fb9f",
+  "riskModel": "0x251f6e4e0f7a0f2ce737bf11c68001ec9683f220"
 }

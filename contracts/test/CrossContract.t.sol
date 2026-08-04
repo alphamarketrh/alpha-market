@@ -8,6 +8,7 @@ import {AlphaMarketCore} from "../src/AlphaMarketCore.sol";
 import {OrderBook} from "../src/OrderBook.sol";
 import {MarginVault} from "../src/MarginVault.sol";
 import {DirectionalVault} from "../src/DirectionalVault.sol";
+import {InterestModel} from "../src/InterestModel.sol";
 import {ParlayFactory} from "../src/ParlayFactory.sol";
 import {MirrorPositionOracle} from "../src/MirrorPositionOracle.sol";
 import {OutcomeToken} from "../src/OutcomeToken.sol";
@@ -36,6 +37,7 @@ contract CrossContractInvariantTest is Test {
     OrderBook book;
     MarginVault mv;
     DirectionalVault dv;
+    InterestModel dvModel;
     ParlayFactory parlay;
     MirrorPositionOracle oracle;
 
@@ -64,7 +66,8 @@ contract CrossContractInvariantTest is Test {
         book = new OrderBook(address(core), 20);
         mv = new MarginVault(address(core), 500, 1500, 10_000_000e6);
         oracle = new MirrorPositionOracle(address(registry), 1 hours, 10_000);
-        dv = new DirectionalVault(address(core), address(oracle));
+        dvModel = new InterestModel(300, 900, 4800, 8000);
+        dv = new DirectionalVault(address(core), address(oracle), address(dvModel), 6000);
         parlay = new ParlayFactory(address(usd), address(registry));
 
         registry.setRelayer(relayer, true);

@@ -8,6 +8,9 @@
   "marginVault": "0xa1a2c9d7048fc1c745d726477d42d02985ce28aa",
   "bookFeeBps": 20,
   "note": "settlement in TSLA. MarginVault needs no oracle here: min(YES,NO) is a proven floor in any unit.",
-  "crossVaultToAUSD": "0xfeb16fbc3578828ac65f788b2c3cca1f43a9e1e9",
-  "crossVaultNote": "borrow aUSD against a TSLA-settled position. LTV 15% and liquidation at 35%, lower than the single-price vaults because collateral value is the product of two moving prices."
+  "crossVaultToAUSD": "0x481ad32ccee2e3762b7467933f03c1bc92326f7d",
+  "crossVaultNote": "borrow aUSD against a TSLA-settled position. LTV 15% and liquidation at 35%, lower than the single-price vaults because collateral value is the product of two moving prices.",
+  "lendingVault": "0x619ff428cf3eac697c8798bab45368a5dc40ab01",
+  "interestModel": "0x63290d3a5582c3657202487cfadabdc41e56fb9f",
+  "riskModel": "0x251f6e4e0f7a0f2ce737bf11c68001ec9683f220"
 }

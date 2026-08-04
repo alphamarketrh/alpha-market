@@ -8,6 +8,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {AlphaMarketCore} from "./AlphaMarketCore.sol";
 import {MarketRegistry} from "./MarketRegistry.sol";
 import {IPositionOracle} from "./interfaces/IPositionOracle.sol";
+import {InterestModel} from "./InterestModel.sol";
 import {MarketTypes} from "./types/MarketTypes.sol";
 import {Pausable} from "./Pausable.sol";
 
@@ -69,11 +70,13 @@ contract DirectionalVault is Ownable, ReentrancyGuard, Pausable {
         uint256 principal;
         uint256 interestOwed;
         uint64 accrualFrom;
+        uint256 lastIndex;
     }
 
     uint256 private constant BPS = 10_000;
     uint256 private constant YEAR = 365 days;
     uint256 private constant ONE = 1e6;
+    uint256 private constant RAY = 1e27;
 
     IERC20 public immutable collateral;
     AlphaMarketCore public immutable core;
@@ -84,7 +87,24 @@ contract DirectionalVault is Ownable, ReentrancyGuard, Pausable {
     uint16 public liqThresholdBps;
     uint16 public liqBonusBps;
     uint16 public closeFactorBps;
-    uint256 public rateBps;
+    /// @notice The rate follows utilisation rather than sitting still.
+    /// @dev A fixed rate cannot defend the last of the liquidity: a supplier
+    ///      who wants out waits on a borrower with no reason to hurry.
+    InterestModel public model;
+
+    /// @notice The highest rate this vault will ever charge, fixed at birth.
+    /// @dev The borrow limit reserves interest to the deadline at this rate,
+    ///      not at the rate in force when the loan is drawn. If the roof could
+    ///      be raised later every existing loan would be under-reserved, so it
+    ///      is immutable and a model that would charge more is clamped to it.
+    ///      Unlike the hedged vault this one liquidates, so a punitive rate is
+    ///      useful here and the roof can sit higher.
+    uint256 public immutable rateCeilingBps;
+
+    /// @notice Grows with accrued interest. Debt is measured against it.
+    uint256 public borrowIndex;
+    uint64 public lastAccrualAt;
+
     uint256 public facilityCap;
 
     /// @notice Seconds before resolution at which a loan must be repaid.
@@ -106,7 +126,9 @@ contract DirectionalVault is Ownable, ReentrancyGuard, Pausable {
 
     event OracleSet(address oracle);
     event ParamsSet(uint16 ltvBps, uint16 liqThresholdBps, uint16 liqBonusBps, uint16 closeFactorBps);
-    event RiskSet(uint256 rateBps, uint256 facilityCap, uint64 deadlineBuffer, uint256 maxDebtPerMarket);
+    event RiskSet(uint256 facilityCap, uint64 deadlineBuffer, uint256 maxDebtPerMarket);
+    event ModelSet(address model);
+    event Accrued(uint256 borrowIndex);
     event Funded(uint256 amount);
     event Defunded(uint256 amount);
     event Pledged(bytes32 indexed id, address indexed user, uint256 yesAmount, uint256 noAmount);
@@ -121,8 +143,17 @@ contract DirectionalVault is Ownable, ReentrancyGuard, Pausable {
     event Swept(bytes32 indexed id, uint256 payout, uint256 badDebtRemaining);
     event SettledAfterResolution(bytes32 indexed id, address indexed user, uint256 payout, uint256 debt);
 
-    constructor(address core_, address oracle_) Ownable(msg.sender) {
-        if (core_ == address(0) || oracle_ == address(0)) revert ZeroAddress();
+    constructor(address core_, address oracle_, address model_, uint256 rateCeilingBps_)
+        Ownable(msg.sender)
+    {
+        if (core_ == address(0) || oracle_ == address(0) || model_ == address(0)) {
+            revert ZeroAddress();
+        }
+        if (rateCeilingBps_ == 0 || rateCeilingBps_ > 20_000) revert BadParams();
+        rateCeilingBps = rateCeilingBps_;
+        model = InterestModel(model_);
+        borrowIndex = RAY;
+        lastAccrualAt = uint64(block.timestamp);
         core = AlphaMarketCore(core_);
         collateral = IERC20(address(AlphaMarketCore(core_).collateral()));
         registry = MarketRegistry(address(AlphaMarketCore(core_).registry()));
@@ -132,14 +163,13 @@ contract DirectionalVault is Ownable, ReentrancyGuard, Pausable {
         liqThresholdBps = 5000;
         liqBonusBps = 800;
         closeFactorBps = 5000;
-        rateBps = 1500;
         facilityCap = 100_000e6;
         deadlineBuffer = 1 hours;
         maxDebtPerMarket = 5_000e6;
 
         emit OracleSet(oracle_);
         emit ParamsSet(ltvBps, liqThresholdBps, liqBonusBps, closeFactorBps);
-        emit RiskSet(rateBps, facilityCap, deadlineBuffer, maxDebtPerMarket);
+        emit RiskSet(facilityCap, deadlineBuffer, maxDebtPerMarket);
     }
 
     // ----------------------------------------------------------------- admin
@@ -160,16 +190,15 @@ contract DirectionalVault is Ownable, ReentrancyGuard, Pausable {
         emit ParamsSet(ltv_, liq_, bonus_, close_);
     }
 
-    function setRisk(uint256 rate_, uint256 cap_, uint64 buffer_, uint256 perMarket_)
+    function setRisk(uint256 cap_, uint64 buffer_, uint256 perMarket_)
         external
         onlyOwner
     {
         if (buffer_ == 0) revert BadParams();
-        rateBps = rate_;
         facilityCap = cap_;
         deadlineBuffer = buffer_;
         maxDebtPerMarket = perMarket_;
-        emit RiskSet(rate_, cap_, buffer_, perMarket_);
+        emit RiskSet(cap_, buffer_, perMarket_);
     }
 
     function fund(uint256 amount) external onlyOwner {
@@ -209,6 +238,7 @@ contract DirectionalVault is Ownable, ReentrancyGuard, Pausable {
         p.yesAmount -= yesAmount;
         p.noAmount -= noAmount;
 
+        _accrue();
         _capitalise(id, p);
         if (p.principal > 0) {
             uint256 limit = borrowLimit(id, msg.sender);
@@ -229,6 +259,7 @@ contract DirectionalVault is Ownable, ReentrancyGuard, Pausable {
         if (block.timestamp >= dl) revert PastDeadline(dl);
 
         Position storage p = _positions[id][msg.sender];
+        _accrue();
         _capitalise(id, p);
         p.principal += amount;
 
@@ -264,6 +295,7 @@ contract DirectionalVault is Ownable, ReentrancyGuard, Pausable {
         nonReentrant
     {
         Position storage p = _positions[id][user];
+        _accrue();
         _capitalise(id, p);
         if (p.principal == 0) revert NothingBorrowed();
 
@@ -310,6 +342,7 @@ contract DirectionalVault is Ownable, ReentrancyGuard, Pausable {
         if (block.timestamp < dl) revert BeforeDeadline(dl);
 
         Position storage p = _positions[id][user];
+        _accrue();
         _capitalise(id, p);
         uint256 debt = p.principal;
         if (debt == 0) revert NothingBorrowed();
@@ -365,6 +398,7 @@ contract DirectionalVault is Ownable, ReentrancyGuard, Pausable {
         Position storage p = _positions[id][user];
         if (p.yesAmount == 0 && p.noAmount == 0) revert NothingPledged();
 
+        _accrue();
         _capitalise(id, p);
         uint256 debt = p.principal;
         uint256 sy = p.yesAmount;
@@ -436,8 +470,40 @@ contract DirectionalVault is Ownable, ReentrancyGuard, Pausable {
         return v;
     }
 
+    /// @notice What may be owed at any point in this loan life.
+    /// @dev Reserves interest to the deadline at the ceiling rate, not the rate
+    ///      in force now. Without that a position could drift past its own
+    ///      limit purely through interest, and a liquidation would be caused by
+    ///      the clock rather than by the price moving.
     function borrowLimit(bytes32 id, address user) public view returns (uint256) {
+        uint256 base = (positionValue(id, user) * ltvBps) / BPS;
+        if (base == 0) return 0;
+        uint64 dl = deadlineOf(id);
+        if (block.timestamp >= dl) return 0;
+        uint256 remaining = dl - block.timestamp;
+        return (base * YEAR * BPS) / (YEAR * BPS + rateCeilingBps * remaining);
+    }
+
+    /// @notice The LTV line without the interest reservation. Used to judge
+    ///         withdrawals, which must not tighten as the deadline nears.
+    function staticLimit(bytes32 id, address user) public view returns (uint256) {
         return (positionValue(id, user) * ltvBps) / BPS;
+    }
+
+    function setModel(address model_) external onlyOwner {
+        if (model_ == address(0)) revert ZeroAddress();
+        _accrue();
+        model = InterestModel(model_);
+        emit ModelSet(model_);
+    }
+
+    function utilisation() external view returns (uint256) {
+        return model.utilisation(totalPrincipal, facilityCap);
+    }
+
+    function borrowRate() external view returns (uint256) {
+        uint256 r = model.borrowRate(totalPrincipal, facilityCap);
+        return r > rateCeilingBps ? rateCeilingBps : r;
     }
 
     function liquidationLimit(bytes32 id, address user) public view returns (uint256) {
@@ -454,9 +520,7 @@ contract DirectionalVault is Ownable, ReentrancyGuard, Pausable {
     function debtOf(bytes32 id, address user) public view returns (uint256) {
         Position memory p = _positions[id][user];
         if (p.principal == 0) return 0;
-        uint256 t = _accrualCutoff(id);
-        if (t <= p.accrualFrom) return p.principal;
-        return p.principal + (p.principal * rateBps * (t - p.accrualFrom)) / (YEAR * BPS);
+        return p.principal + _pendingInterest(id, p, currentIndex());
     }
 
     function availableToBorrow(bytes32 id, address user) external view returns (uint256) {
@@ -490,9 +554,8 @@ contract DirectionalVault is Ownable, ReentrancyGuard, Pausable {
     ///      exceeds the quoted one.
     function _capitalise(bytes32 id, Position storage p) internal {
         if (p.principal != 0) {
-            uint64 nowT = _accrualCutoff(id);
-            if (nowT > p.accrualFrom) {
-                uint256 i = (p.principal * rateBps * (nowT - p.accrualFrom)) / (YEAR * BPS);
+            if (p.lastIndex != 0) {
+                uint256 i = _pendingInterest(id, p, borrowIndex);
                 if (i != 0) {
                     p.principal += i;
                     p.interestOwed += i;
@@ -500,13 +563,78 @@ contract DirectionalVault is Ownable, ReentrancyGuard, Pausable {
                 }
             }
         }
+        p.lastIndex = borrowIndex;
         p.accrualFrom = uint64(block.timestamp);
+    }
+
+    /// @dev The index and the interest it implies, without writing anything.
+    function _pendingAccrual() internal view returns (uint256 idx, uint256 interest) {
+        idx = borrowIndex;
+        uint64 nowT = uint64(block.timestamp);
+        if (nowT <= lastAccrualAt || totalPrincipal == 0) return (idx, 0);
+
+        uint256 rate = model.borrowRate(totalPrincipal, facilityCap);
+        // Never charge above the roof the reservations were computed against.
+        if (rate > rateCeilingBps) rate = rateCeilingBps;
+        uint256 elapsed = nowT - lastAccrualAt;
+        idx += (idx * rate * elapsed) / (YEAR * BPS);
+        interest = (totalPrincipal * rate * elapsed) / (YEAR * BPS);
+    }
+
+    /// @notice The borrow index including growth not yet written to storage.
+    function currentIndex() public view returns (uint256) {
+        (uint256 idx, ) = _pendingAccrual();
+        return idx;
+    }
+
+    /// @dev Advance the index. Every entry point calls this first, so a window
+    ///      is charged at the rate that was actually in force during it.
+    function _accrue() internal {
+        (uint256 idx, ) = _pendingAccrual();
+        if (idx != borrowIndex) {
+            borrowIndex = idx;
+            emit Accrued(idx);
+        }
+        lastAccrualAt = uint64(block.timestamp);
+    }
+
+    /// @dev Interest a position owes but has not yet had folded into principal.
+    ///
+    ///      Growth stops at the deadline, because past it an outcome token
+    ///      jumps to zero or one in a single block and no liquidator can act
+    ///      inside that move. When the window since the last touch straddles
+    ///      the deadline the growth is apportioned by time, then bounded by
+    ///      what the ceiling rate could have produced over the same window.
+    ///      The bound matters because the index compounds: a position left
+    ///      alone through many deadlines would otherwise be charged for growth
+    ///      that happened long after its own.
+    function _pendingInterest(bytes32 id, Position memory p, uint256 idx)
+        internal
+        view
+        returns (uint256)
+    {
+        if (p.principal == 0 || p.lastIndex == 0 || idx <= p.lastIndex) return 0;
+
+        uint64 dl = deadlineOf(id);
+        if (p.accrualFrom >= dl) return 0;
+
+        uint256 full = (p.principal * (idx - p.lastIndex)) / p.lastIndex;
+        uint64 nowT = uint64(block.timestamp);
+        if (nowT > dl) {
+            uint256 window = nowT - p.accrualFrom;
+            if (window == 0) return 0;
+            full = (full * (dl - p.accrualFrom)) / window;
+        }
+
+        uint256 cap = (p.principal * rateCeilingBps * (dl - p.accrualFrom)) / (YEAR * BPS);
+        return full < cap ? full : cap;
     }
 
     function _repayFor(bytes32 id, address payer, address user, uint256 amount) internal {
         if (amount == 0) revert ZeroAmount();
         Position storage p = _positions[id][user];
         if (p.principal == 0) revert NothingBorrowed();
+        _accrue();
         _capitalise(id, p);
         // uint256 max means whatever the debt is at execution time. Repaying a
         // figure read earlier always leaves dust, which strands the collateral.
