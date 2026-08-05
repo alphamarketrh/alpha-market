@@ -208,6 +208,8 @@ async function refreshBook(ctx) {
   }
 }
 
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
 export function startBookRefresh(ctx, everyMs = 180000) {
   // A full sweep measured 163 seconds across two hundred markets and five
   // currencies, so asking every thirty simply queued four calls that the guard
@@ -248,10 +250,19 @@ async function buildBook(ctx, { marketId = null, onlyActive = true } = {}) {
   }
 
   const markets = await mapLimit(ids, 4, (id) => readMarket(ctx, id));
-  const live = onlyActive ? markets.filter((m) => m.status === "Active") : markets;
-  const orders = await mapLimit(live, 3, (m) => readOrders(ctx, m.id));
-
   const meta = upstreamMeta();
+  // A market with no upstream record has no question, no image and no rules,
+  // so a card for it says nothing a reader can act on. Registering one is how
+  // the smoke tests exercise the registry, and those run against this same
+  // chain, so they are dropped here rather than left to fill the interface.
+  const named = (onlyActive ? markets.filter((m) => m.status === "Active") : markets)
+    .filter((m) => meta[m.id.toLowerCase()]?.question);
+  const namedOrders = await mapLimit(named, 3, (m) => readOrders(ctx, m.id));
+  // A market with no resting order has no price, so a card for it offers
+  // nothing to act on. Only quoted markets are listed.
+  const keep = named.map((m, i) => i).filter((i) => (namedOrders[i] || []).some((o) => o.open));
+  const live = keep.map((i) => named[i]);
+  const orders = keep.map((i) => namedOrders[i]);
   const rows = live.map((m, i) => ({
     ...m,
     ...(meta[m.id.toLowerCase()] || {}),
@@ -277,6 +288,12 @@ async function buildBook(ctx, { marketId = null, onlyActive = true } = {}) {
           ...summarise(porders[i] || []),
           orders: (porders[i] || []).filter((o) => o.open),
         }))
+        // A question is only tradeable in a currency once that currency's core
+        // has minted its YES and NO pair. Until then there is nothing to buy,
+        // so it is left out rather than listed as a card that opens onto an
+        // empty book.
+        .filter((m) => m.yesToken && m.yesToken !== ZERO_ADDRESS)
+        .filter((m) => m.openOrders > 0)
         .sort((a, b) => b.openOrders - a.openOrders);
       pairs.push({
         symbol: pair.symbol,

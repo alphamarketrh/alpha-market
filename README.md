@@ -6,7 +6,7 @@
 
 [![license](https://img.shields.io/badge/license-MIT-E8E8E8?style=flat-square&labelColor=111111)](LICENSE)
 [![solidity](https://img.shields.io/badge/solidity-0.8.28-E8E8E8?style=flat-square&labelColor=111111)](contracts/foundry.toml)
-[![tests](https://img.shields.io/badge/tests-206%20passing-E8E8E8?style=flat-square&labelColor=111111)](#testing)
+[![tests](https://img.shields.io/badge/tests-232%20passing-E8E8E8?style=flat-square&labelColor=111111)](#testing)
 [![fuzz](https://img.shields.io/badge/fuzz-18%20invariants%20%C3%97%2050k-E8E8E8?style=flat-square&labelColor=111111)](#testing)
 [![chain](https://img.shields.io/badge/chain-Robinhood%20Chain-E8E8E8?style=flat-square&labelColor=111111)](https://explorer.testnet.chain.robinhood.com)
 [![settlement](https://img.shields.io/badge/settles%20in-5%20currencies-E8E8E8?style=flat-square&labelColor=111111)](#deployed-on-robinhood-chain-testnet-chainid-46630)
@@ -36,7 +36,7 @@ against a position, each priced by how much can actually be proven about what
 the collateral is worth.**
 
 **Status:** live at **[alphamarket.network](https://alphamarket.network)** on
-testnet 46630, settling in five currencies. 206 contract tests, 13 relayer
+testnet 46630, settling in five currencies. 232 contract tests, 13 relayer
 tests, 18 fuzzed invariants at 50,000 runs each, and 7 end-to-end smoke scripts
 that run against the deployed contracts rather than a local simulator.
 
@@ -420,7 +420,7 @@ Read from chain, not from memory.
 
 ```bash
 cd contracts
-forge test                                    # 206 tests
+forge test                                    # 232 tests
 FOUNDRY_PROFILE=deep forge test --match-test testFuzz   # 18 invariants, 50k runs
 
 cd ../relayer && npm test                     # 13 tests
@@ -441,6 +441,8 @@ cd ../relayer && npm test                     # 13 tests
 | `TestDollar.t.sol` | 11 | Faucet limits and the supply cap |
 | `CrossContract.t.sol` | 5 | Six mint/burn paths against one core at once |
 | `RevertAtomicity.t.sol` | 2 | A failed redeem must not burn the token |
+| `ChainlinkRounds.t.sol` | 16 | Locating a round by timestamp, replayed from real history |
+| `ChainlinkRoundsFork.t.sol` | 10 | The same walk against the live mainnet aggregators |
 
 Three of those suites exist because they found real bugs:
 
@@ -466,6 +468,40 @@ Three of those suites exist because they found real bugs:
 
 Each asserts its final state and exits non-zero on failure.
 
+### Against the live Chainlink feeds, no gas
+
+```bash
+FOUNDRY_PROFILE=fork forge test --match-contract ChainlinkRoundsFork -vv
+```
+
+Ten tests read the real equity aggregators on mainnet 4663 over a fork. They are
+excluded from the default run because a full pass takes over two minutes.
+
+The `fork` profile exists because those aggregators were compiled for Shanghai and
+use `PUSH0`, 341 occurrences in the TSLA aggregator with the first at offset 12.
+Under `paris`, revm reports `NotActivated`, burns the whole gas limit, and every
+test fails with a bare `Revert`. The profile sets `evm_version = "shanghai"` and
+writes to `out-fork`, so the default profile and every deployed contract keep
+their `paris` bytecode.
+
+The suite gates on `FOUNDRY_PROFILE` and skips under any other profile. It cannot
+gate on `block.prevrandao`: that is still zero when `setUp` begins, before
+`createSelectFork` replaces the environment, so every test would skip silently. A
+skipped test costs about 5,600 gas and finishes in under a millisecond, a real one
+costs tens of thousands and takes minutes. Check the gas number before believing a
+pass.
+
+---
+
+## Design notes
+
+Work that is proposed rather than built lives in `docs/`, so this file stays a
+description of what runs today.
+
+- [`docs/richter-markets.md`](docs/richter-markets.md) — a native market category
+  on the size of an equity move between one close and the next open, resolved from
+  Chainlink with no relayer in the path. Proposal, with one open blocker.
+
 ---
 
 ## Layout
@@ -473,7 +509,7 @@ Each asserts its final state and exits non-zero on failure.
 ```
 contracts/
   src/            14 contracts + 2 interfaces
-  test/           13 suites, 206 tests
+  test/           15 suites, 232 tests
   script/         7 deploy scripts
   deployments/    the addresses that matter, per chain and per pair
 relayer/
