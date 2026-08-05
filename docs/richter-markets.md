@@ -28,7 +28,8 @@ decided 5 August 2026, for the reason in section 6.
 | IPositionOracle can be swapped | verified | `positionOracle` is its own field in 46630.json |
 | DirectionalVault can be gated per market | verified | standalone at 0x26108683fea6956914362711818acfac1a56c718 |
 | OrderBook handles the full price range | verified | smoke test filled at 0.40 through 0.70 |
-| MarketRegistry can carry a category flag | **fails** | struct Market is Polymarket-bound, no spare field |
+| MarketRegistry needs no change at all | verified | registerMarket checks two things, neither Polymarket-specific |
+| MarketRegistry is upgradeable | **no** | Ownable with a constructor and an immutable, EIP-1967 slots all zero |
 | Chainlink equity feeds exist on mainnet | verified | four feeds live, read directly |
 | Round history can be walked backwards | verified | 10 fork tests pass against the live aggregators |
 | Testnet 46630 has equity feeds | **no** | stated in 46630.json and relayer/src/equity.js |
@@ -156,24 +157,89 @@ Alpha Market own order book, which can be pushed, borrowed against at a self-mad
 price, and abandoned. Enforce the rejection in the contract, not the frontend.
 Users keep leverage through LendingVault at 95% by holding both sides.
 
-## 7. Blocker: MarketRegistry has no room for a category
+## 7. Market identity and registration
 
-`struct Market` is bound to Polymarket from its first field, `conditionId`, and
-carries `depthUsd` which is meaningless for a Richter market. There is no spare
-field.
+An earlier draft treated this section as a blocker and offered three ways to give
+MarketRegistry a category field. All three were answers to a question that does
+not need asking. **The registry is not changed.**
 
-Three options, unresolved:
+### Why nothing needs to change
 
-1. **Separate registry.** `RichterRegistry` alongside `MarketRegistry`, both
-   feeding the same core. No storage migration, but two registries to keep
-   consistent.
-2. **Extend the struct and redeploy.** Clean, but the registry is live with 352
-   tracked markets and holds resolution state.
-3. **Side mapping.** `mapping(bytes32 => uint8) category` appended as a new
-   variable. Appends to storage rather than altering layout. Cheapest, but leaves
-   the Polymarket fields dead for Richter markets.
+registerMarket enforces exactly two conditions, and neither is specific to
+Polymarket: the market must not already be registered, and depthUsd must be at or
+above minDepthUsd. minDepthUsd is currently 0, so the second is not binding.
+conditionId is a bytes32 used as a key; the name refers to Polymarket but nothing
+constrains its contents.
 
-Option 3 is least disruptive, option 1 cleanest. Decide before writing the oracle.
+More decisive: the core never reads the Polymarket-specific fields. Every call it
+makes into the registry goes through a status or outcome accessor.
+
+| Call site | What it asks |
+| --- | --- |
+| AlphaMarketCore.sol:63 | statusOf |
+| AlphaMarketCore.sol:91 | isTradeable |
+| AlphaMarketCore.sol:103, :118 | isResolved |
+| AlphaMarketCore.sol:120 | outcomeOf |
+| AlphaMarketCore.sol:145 | owner |
+
+Across the whole of src/, the registry is called 42 times through six view
+functions. conditionId and depthUsd are read by none of them.
+
+### Redeploying was never an option anyway
+
+MarketRegistry is Ownable with a constructor and an immutable bondToken, so it is
+not upgradeable by construction. On chain, all three EIP-1967 slots read zero and
+the bytecode is 8,890 bytes, so the deployed address is the contract itself and
+not a proxy. implementation() and proxiableUUID() both revert.
+
+Seven contracts hold the registry as an immutable: AlphaMarketCore, OrderBook,
+LendingVault, MarginVault, DirectionalVault, CrossVault, MirrorPositionOracle, and
+ParlayFactory. An immutable is baked into bytecode at deployment with no setter,
+so replacing the registry would mean redeploying the entire system, multiplied by
+five settlement currencies, and migrating the resolution state of every live
+market.
+
+### Market identity
+
+Richter market ids are derived, not assigned:
+
+    id = keccak256(abi.encode(feed, tier, closeTimestamp))
+
+Deterministic, so anyone can recompute an id and verify it belongs to the market
+it claims to. Collision with a Polymarket conditionId is not a practical concern
+at 32 bytes.
+
+### Where the category actually lives
+
+Only two contracts need to know a market is Richter: RichterPositionOracle, which
+reads Chainlink and computes s, and DirectionalVault, which must refuse Richter
+positions per section 6. Both can hold that knowledge themselves. Neither requires
+the registry to carry it.
+
+### Registration is done by a contract, not a process
+
+registerMarket is onlyRelayer, so something must hold that role. The existing
+relayer is an EOA running a Node process, which is correct for mirrored markets
+because reading Polymarket means reading another chain.
+
+Richter needs none of that. Exchange hours are a fixed rule and Chainlink prices
+are on the same chain, so RichterMarketFactory holds the relayer role instead,
+granted with setRelayer(factory, true), which is already onlyOwner.
+
+This is the stronger arrangement. With an EOA, users must trust that a private
+server creates markets with the right parameters and have no way to check. With a
+contract, the caps, the schedule and the permitted tickers are readable on an
+explorer. It also removes a real operational failure: the existing relayer has run
+out of gas twice, silently, and market creation should not depend on that.
+
+The role is narrow by design. A relayer can call registerMarket, updateDepth,
+halt and unhalt. It cannot touch funds, resolve a market, or change a parameter. A
+faulty factory can at worst create junk markets, which can be halted, and the role
+is revoked with setRelayer(factory, false) without affecting any market already
+registered.
+
+The factory must therefore be as narrow as it can be: it accepts only ids derived
+by the formula above, only for tickers on a fixed list, and exposes nothing else.
 
 ## 8. Development strategy
 
@@ -228,7 +294,7 @@ both categories show measurable volume.
 | --- | --- | --- |
 | 0 | Ship the current build | demo recorded, testnet stable |
 | 1 | Calibration study | caps chosen from data, or design dropped |
-| 2 | Decide the registry option | decision recorded here |
+| 2 | Write RichterMarketFactory, narrow scope, grant the relayer role | factory registers one market on testnet |
 | 3 | Build RichterPositionOracle, factory, graded settlement | full suite green |
 | 4 | Mainnet 4663, weekly tier, one ticker, small cap | one month, no incident |
 | 5 | Richter becomes the front page, mirror runs underneath | Richter books hold their own prices |
@@ -239,7 +305,8 @@ price history. Do not remove it before the structure stands.
 
 ## 12. Open questions
 
-1. Registry option, section 7. Blocks the oracle.
+1. Whether Richter is built before or after the current release. A business
+   decision, not a technical one. The technical recommendation is after.
 2. Cold start pricing. Richter markets open with no price history.
 3. Gas versus stake size on the daily tier. Overnight moves are often under 1%.
 4. Tier caps. Placeholders until section 9.
