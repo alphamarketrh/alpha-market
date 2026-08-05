@@ -22,7 +22,10 @@ say(){ echo; echo "== $1"; }
 die(){ echo; echo "FAILED: $1"; exit 1; }
 send(){ cast send --rpc-url "$RPC" --private-key "$PK" "$@" >/dev/null || die "tx reverted: $*"; }
 rsend(){ cast send --rpc-url "$RPC" --private-key "$RPK" "$@" >/dev/null || die "relayer tx reverted: $*"; }
-xsend(){ local k="$1"; shift; cast send --rpc-url "$RPC" --private-key "$k" "$@" >/dev/null || die "tx reverted for a party: $*"; }
+xsend(){ local k="$1"; shift
+  cast send --rpc-url "$RPC" --private-key "$k" "$@" >/dev/null 2>&1 && return 0
+  sleep 3
+  cast send --rpc-url "$RPC" --private-key "$k" "$@" >/dev/null || die "tx reverted for a party: $*"; }
 call(){ cast call --rpc-url "$RPC" "$@"; }
 n(){ awk "{print \$1}"; }
 usd(){ awk -v v="$1" "BEGIN{printf \"%.2f\", v/1000000}"; }
@@ -57,8 +60,8 @@ echo "  buyer of YES $A"
 echo "  buyer of NO  $B"
 for pair in "$APK:$A" "$BPK:$B"; do
   k="${pair%%:*}"; addr="${pair##*:}"
-  send "$COLL" "mint(address,uint256)" "$addr" 2000000000
   send --value 0.0003ether "$addr"
+  xsend "$k" "$COLL" "claim()"
   xsend "$k" "$COLL" "approve(address,uint256)" "$OB" 2000000000
 done
 echo "  A holds $(usd "$(call "$COLL" 'balanceOf(address)(uint256)' "$A" | n)") cash, $(call "$YES" 'balanceOf(address)(uint256)' "$A" | n) YES"
@@ -73,8 +76,9 @@ IDY=$(call "$OB" 'marketOrderIds(bytes32)(uint256[])' "$MID" | tr -d "[]" | tr "
 IDN=$(call "$OB" 'marketOrderIds(bytes32)(uint256[])' "$MID" | tr -d "[]" | tr "," "\n" | sed -n "2p" | tr -d " ")
 echo "  order $IDY  BuyYes at 0.60 for $(usd "$AMT")"
 echo "  order $IDN  BuyNo  at 0.45 for $(usd "$AMT")"
-echo "  escrowed from A: $(usd $(( 2000000000 - $(call "$COLL" 'balanceOf(address)(uint256)' "$A" | n) )))"
-echo "  escrowed from B: $(usd $(( 2000000000 - $(call "$COLL" 'balanceOf(address)(uint256)' "$B" | n) )))"
+CLAIMED=$(call "$COLL" 'claimAmount()(uint256)' | n)
+echo "  escrowed from A: $(usd $(( CLAIMED - $(call "$COLL" 'balanceOf(address)(uint256)' "$A" | n) )))"
+echo "  escrowed from B: $(usd $(( CLAIMED - $(call "$COLL" 'balanceOf(address)(uint256)' "$B" | n) )))"
 
 say "4. THE COLD START: anyone matches the two buys into a minted pair"
 MB=$(call "$COLL" 'balanceOf(address)(uint256)' "$ME" | n)
@@ -102,8 +106,8 @@ IDS=$(call "$OB" 'marketOrderIds(bytes32)(uint256[])' "$MID" | tr -d "[]" | tr "
 echo "  order $IDS  SellYes at 0.70 for 400.00"
 
 CPK=$(newwallet); C=$(cast wallet address --private-key "$CPK")
-send "$COLL" "mint(address,uint256)" "$C" 1000000000
 send --value 0.0003ether "$C"
+xsend "$CPK" "$COLL" "claim()"
 xsend "$CPK" "$COLL" "approve(address,uint256)" "$OB" 1000000000
 AB=$(call "$COLL" 'balanceOf(address)(uint256)' "$A" | n)
 xsend "$CPK" "$OB" "fill(uint256,uint128)" "$IDS" 400000000

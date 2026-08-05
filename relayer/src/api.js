@@ -182,19 +182,37 @@ function summarise(orders) {
 let bookCache = null;
 let bookBuilding = false;
 
+/**
+ * Set while a cycle is broadcasting, so the sweep waits its turn.
+ *
+ * The relayer and this refresh share one rate limited RPC. Running both at once
+ * is what produced "exceeded maximum retry limit": the cycle sends transactions
+ * a few seconds apart while the sweep issues hundreds of reads, and together
+ * they pass what the endpoint allows. Writes matter more than a fresh snapshot,
+ * so the sweep yields.
+ */
+let cycleBusy = false;
+export function setCycleBusy(v) { cycleBusy = v; }
+
 async function refreshBook(ctx) {
-  if (bookBuilding) return;
+  if (bookBuilding || cycleBusy) return;
   bookBuilding = true;
+  const started = Date.now();
   try {
     bookCache = { at: Date.now(), v: await buildBook(ctx, {}) };
+    console.log(`  book rebuilt in ${((Date.now() - started) / 1000).toFixed(1)}s`);
   } catch (e) {
-    console.log(`  book refresh failed: ${String(e).slice(0, 90)}`);
+    console.log(`  book refresh failed after ${((Date.now() - started) / 1000).toFixed(1)}s: ${String(e).slice(0, 80)}`);
   } finally {
     bookBuilding = false;
   }
 }
 
-export function startBookRefresh(ctx, everyMs = 30000) {
+export function startBookRefresh(ctx, everyMs = 180000) {
+  // A full sweep measured 163 seconds across two hundred markets and five
+  // currencies, so asking every thirty simply queued four calls that the guard
+  // above threw away. Three minutes lets one finish before the next begins.
+
   refreshBook(ctx);
   setInterval(() => refreshBook(ctx), everyMs);
 }
@@ -203,7 +221,19 @@ export async function bookSnapshot(ctx, { marketId = null, onlyActive = true } =
   // A single market is cheap enough to read live.
   if (marketId) return buildBook(ctx, { marketId, onlyActive });
   if (bookCache) return { ...bookCache.v, builtMsAgo: Date.now() - bookCache.at };
-  return buildBook(ctx, { onlyActive });
+
+  // Never sweep the whole registry inside a request. Two hundred markets
+  // across five currencies takes minutes when the relayer is also broadcasting,
+  // and both share one rate limited RPC, so the caller would simply hang.
+  // Answer honestly instead: nothing yet, and say why.
+  return {
+    chainId: config.chainId,
+    block: 0,
+    building: true,
+    note: "the first sweep has not finished; try again shortly",
+    markets: [],
+    pairs: [],
+  };
 }
 
 async function buildBook(ctx, { marketId = null, onlyActive = true } = {}) {

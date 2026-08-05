@@ -7,6 +7,7 @@ import { connect, send, toId, STATUS, OUTCOME } from "./chain.js";
 import { refreshEquityPrices } from "./equity.js";
 import { refreshPositionPrices } from "./positions.js";
 import { matchOrderBook } from "./matcher.js";
+import { setCycleBusy } from "./api.js";
 import { loadPairs, connectPairs, pairContext } from "./pairs.js";
 import {
   fetchActiveMarkets, fetchMarket, fetchDepth, readResolution, mapLimit,
@@ -23,6 +24,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * discovery half of the cycle later fails.
  */
 export async function runCycle(ctx) {
+  // Hold off the book sweep while this runs. Both share one rate limited RPC,
+  // and a cycle broadcasting transactions alongside hundreds of reads is what
+  // produced "exceeded maximum retry limit". Released in a finally so a cycle
+  // that throws does not leave the sweep switched off for good.
+  setCycleBusy(true);
+  try {
+    return await _runCycle(ctx);
+  } finally {
+    setCycleBusy(false);
+  }
+}
+
+async function _runCycle(ctx) {
   const state = loadState();
   state.cycles = (state.cycles || 0) + 1;
   state.markets = state.markets || {};
@@ -162,6 +176,16 @@ async function trackExisting(ctx, state, summary) {
 
     // 2. propose once upstream has a determinate answer
     if (res.state === "resolved" && (status === 1 || status === 2)) {
+      // The status above was read at the top of a cycle that can run for a
+      // minute across five currencies, and anybody may propose. Re-read it
+      // here so a proposal that already landed is skipped rather than sent
+      // and refused, which logs a failure for something that in fact worked.
+      const fresh = Number(await ctx.registry.statusOf(id));
+      if (fresh !== 1 && fresh !== 2) {
+        console.log(`  already past proposal (${STATUS[fresh]})  ${rec.question}`);
+        continue;
+      }
+
       console.log(`  PROPOSE ${OUTCOME[res.outcome]} for ${rec.question}`);
       const bond = await ctx.registry.bondAmount();
       const allowance = await ctx.collateral.allowance(ctx.address, config.registry);
@@ -316,7 +340,24 @@ async function discoverNew(ctx, state, summary) {
     if (r.error) continue;
 
     if (config.live) {
+      // Every settlement currency, not just the primary one. A market that
+      // exists in aUSD but nowhere else cannot be traded in the equity the
+      // holder actually owns, which is the whole point of the venue. Each call
+      // deploys two token contracts, so this is the expensive part of adding a
+      // market and it is done once, here, rather than left for somebody to
+      // discover missing.
       await send(`initializeMarket ${id.slice(0, 10)}`, ctx.core.initializeMarket, id);
+      for (const pair of connectPairs(ctx, loadPairs(config.deploymentsDir, config.chainId))) {
+        const pctx = pairContext(ctx, pair);
+        try {
+          const [y] = await pctx.core.tokensOf(id);
+          if (y !== "0x0000000000000000000000000000000000000000") continue;
+          await send(`initializeMarket ${pair.symbol} ${id.slice(0, 10)}`,
+                     pctx.core.initializeMarket, id);
+        } catch (e) {
+          console.log(`  init ${pair.symbol} skipped: ${String(e).slice(0, 60)}`);
+        }
+      }
     }
     // Tags belong to the event, and the event id arrives with the market, so
     // the category costs one batched call rather than one call per market.

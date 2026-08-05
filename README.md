@@ -2,7 +2,7 @@
 
 # Alpha Market
 
-**One asset. Four jobs.**
+<img src="assets/banner.png" alt="One asset. Four jobs." width="820">
 
 [![license](https://img.shields.io/badge/license-MIT-E8E8E8?style=flat-square&labelColor=111111)](LICENSE)
 [![solidity](https://img.shields.io/badge/solidity-0.8.28-E8E8E8?style=flat-square&labelColor=111111)](contracts/foundry.toml)
@@ -399,7 +399,7 @@ Read from chain, not from memory.
 | Ruling delay | 24 hours |
 | Dispute timeout | 7 days |
 | Minimum source depth | 0, gate removed |
-| aUSD faucet | 10,000 per claim, 12 hour cooldown, 100M cap |
+| aUSD faucet | 1,000 per claim, 24 hour cooldown, 100M cap |
 | Order book fee | 20 bps, capped at 200 in code |
 | LendingVault haircut | 5% below the proven floor |
 | LendingVault reserve | 10% of interest, held against loss |
@@ -409,7 +409,7 @@ Read from chain, not from memory.
 | DirectionalVault | 30% LTV, 50% liquidation, 8% bonus |
 | CrossVault | 15% LTV, 35% liquidation, 10% bonus |
 | Deadline buffer | 1 hour before resolution, both vaults |
-| Debt cap per market | 5,000 aUSD |
+| Debt cap per market | 10,000 aUSD |
 | Equity price max age | 3 days, spanning a weekend |
 | Position odds max age | 1 hour |
 | Position move cap | 20% per update |
@@ -421,7 +421,7 @@ Read from chain, not from memory.
 ```bash
 cd contracts
 forge test                                    # 206 tests
-FOUNDRY_PROFILE=deep forge test --match-test testFuzz   # 13 invariants, 50k runs
+FOUNDRY_PROFILE=deep forge test --match-test testFuzz   # 18 invariants, 50k runs
 
 cd ../relayer && npm test                     # 13 tests
 ```

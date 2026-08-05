@@ -35,7 +35,7 @@ mustfail(){ if cast send --rpc-url "$RPC" --private-key "$1" "${@:2}" >/dev/null
 
 DELAY=60
 TIMEOUT=180
-AMT=1000000000
+AMT=200000000
 BOND=$(call "$REG" "bondAmount()(uint256)" | n)
 END=$(( $(date +%s) + 2592000 ))
 A=0x$(openssl rand -hex 32)
@@ -71,8 +71,8 @@ say "3. propose then dispute on both markets"
 DPK=$(cast wallet new --json | python3 -c "import sys,json;print(json.load(sys.stdin)[0][\"private_key\"])")
 DIS=$(cast wallet address --private-key "$DPK")
 echo "  disputer $DIS"
-send "$COLL" "mint(address,uint256)" "$DIS" $(( BOND * 4 ))
 send --value 0.001ether "$DIS"
+cast send --rpc-url "$RPC" --private-key "$DPK" "$COLL" "claim()" >/dev/null || die "disputer claim failed"
 cast send --rpc-url "$RPC" --private-key "$DPK" "$COLL" "approve(address,uint256)" "$REG" $(( BOND * 4 )) >/dev/null || die "disputer approve failed"
 
 send "$COLL" "approve(address,uint256)" "$REG" $(( BOND * 4 ))
@@ -87,10 +87,11 @@ DIS_AFTER_BONDS=$(call "$COLL" "balanceOf(address)(uint256)" "$DIS" | n)
 say "4. PROTECTION 5: merge still works during a dispute"
 echo "  a matched pair is worth one unit whatever the arbiter decides"
 BEFORE=$(call "$COLL" "balanceOf(address)(uint256)" "$ME" | n)
-send "$CORE" "merge(bytes32,uint256)" "$A" 400000000
+MERGE=$(( AMT * 4 / 10 ))
+send "$CORE" "merge(bytes32,uint256)" "$A" "$MERGE"
 AFTER=$(call "$COLL" "balanceOf(address)(uint256)" "$ME" | n)
 echo "  merged 400 YES + 400 NO, received $(usd $(( AFTER - BEFORE )))"
-[ "$(( AFTER - BEFORE ))" -eq 400000000 ] || die "merge did not pay out in full"
+[ "$(( AFTER - BEFORE ))" -eq "$MERGE" ] || die "merge did not pay out in full"
 
 say "5. PROTECTION 1: neither owner nor a stranger may rule"
 echo -n "  owner proposeRuling:   "
@@ -138,7 +139,7 @@ BEFORE=$(call "$COLL" "balanceOf(address)(uint256)" "$ME" | n)
 send "$CORE" "redeem(bytes32,uint256,uint256)" "$B" "$AMT" 0
 AFTER=$(call "$COLL" "balanceOf(address)(uint256)" "$ME" | n)
 echo "  redeemed 1000 YES for $(usd $(( AFTER - BEFORE )))  (half, as Invalid pays 0.5 each)"
-[ "$(( AFTER - BEFORE ))" -eq 500000000 ] || die "invalid payout wrong"
+[ "$(( AFTER - BEFORE ))" -eq "$(( AMT / 2 ))" ] || die "invalid payout wrong"
 
 say "10. restore production dispute parameters"
 send "$REG" "setDisputeParams(uint64,uint64)" 86400 604800

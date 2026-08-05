@@ -32,7 +32,7 @@ px(){ awk -v v="$1" "BEGIN{printf \"%.4f\", v/1000000}"; }
 
 MID=0x$(openssl rand -hex 32)
 END=$(( $(date +%s) + 2592000 ))   # 30 days out
-AMT=1000000000                      # 1000 USDG
+AMT=200000000                       # 200 USDG
 
 say "0. context"
 echo "  vault    $DV"
@@ -59,10 +59,10 @@ send "$DV" "pledge(bytes32,uint256,uint256)" "$MID" "$AMT" 0
 VAL=$(call "$DV" 'positionValue(bytes32,address)(uint256)' "$MID" "$ME" | n)
 LIM=$(call "$DV" 'borrowLimit(bytes32,address)(uint256)' "$MID" "$ME" | n)
 LIQ=$(call "$DV" 'liquidationLimit(bytes32,address)(uint256)' "$MID" "$ME" | n)
-echo "  position value   $(usd "$VAL")   (1000 YES at 0.60)"
+echo "  position value   $(usd "$VAL")   ($(usd "$AMT") YES at 0.60)"
 echo "  borrow limit     $(usd "$LIM")   30 percent LTV"
 echo "  liquidation at   $(usd "$LIQ")   50 percent"
-[ "$VAL" = "600000000" ] || die "expected 600.00 value, got $(usd "$VAL")"
+[ "$VAL" = "$(( AMT * 6 / 10 ))" ] || die "expected $(usd $(( AMT * 6 / 10 ))) value, got $(usd "$VAL")"
 echo "  >>> a one-sided pledge has borrow power here. MarginVault would lend 0."
 
 AVAIL=$(call "$DV" 'availableToBorrow(bytes32,address)(uint256)' "$MID" "$ME" | n)
@@ -93,8 +93,8 @@ KEEP=$(cast wallet address --private-key "$KPK")
 echo "  keeper $KEEP"
 DEBT=$(call "$DV" 'debtOf(bytes32,address)(uint256)' "$MID" "$ME" | n)
 HALF=$(( DEBT / 2 ))
-send "$COLL" "mint(address,uint256)" "$KEEP" $(( DEBT * 2 ))
 send --value 0.0006ether "$KEEP"
+cast send --rpc-url "$RPC" --private-key "$KPK" "$COLL" "claim()" >/dev/null || die "keeper claim failed"
 cast send --rpc-url "$RPC" --private-key "$KPK" "$COLL" "approve(address,uint256)" "$DV" $(( DEBT * 2 )) >/dev/null || die "keeper approve failed"
 K0=$(call "$YES" 'balanceOf(address)(uint256)' "$KEEP" | n)
 cast send --rpc-url "$RPC" --private-key "$KPK" "$DV" "liquidate(bytes32,address,uint256)" "$MID" "$ME" "$HALF" >/dev/null || die "liquidation reverted"
