@@ -1,8 +1,11 @@
 # Secrets. Four private keys live here: deployer, relayer, arbiter, guardian.
 .env
 
-# Build output, all reproducible with `forge build`
+# Build output, all reproducible with `forge build`. out-fork/ holds the same
+# artifacts under the fork profile, which compiles for shanghai and must not
+# overwrite the paris bytecode in out/.
 out/
+out-fork/
 cache/
 
 # Deployment transaction logs. The addresses that matter are committed in
