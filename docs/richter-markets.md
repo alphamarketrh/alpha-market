@@ -125,13 +125,73 @@ age on the open reading.
 
 Each market issues a complementary pair, BIG and CALM, summing to 1.
 
+### Calibration result
+
+Every published round for all four feeds was pulled from mainnet 4663 on 5 August
+2026 and replayed through the settlement rule. 4,548 rounds, none missing, none
+errored. 104 daily windows and 24 weekend windows.
+
+| Ticker | Daily median | Daily p90 | Daily max | Weekend median | Weekend max |
+| --- | --- | --- | --- | --- | --- |
+| AMD | 3.64% | 6.74% | 8.27% | 2.87% | 4.21% |
+| PLTR | 1.66% | 4.28% | 16.55% | 2.08% | 3.76% |
+| TSLA | 0.93% | 3.08% | 9.87% | 0.24% | 1.51% |
+| AMZN | 0.75% | 2.58% | 11.85% | 1.13% | 3.46% |
+
+Two results contradict the earlier draft.
+
+**A single cap across tickers is wrong.** The daily median spans five times, from
+0.75% on AMZN to 3.64% on AMD. AMD alone would clear a 3% cap half the time. Caps
+must be per ticker, set near the observed p90:
+
+| Ticker | Daily cap |
+| --- | --- |
+| AMZN | 3% |
+| TSLA | 4% |
+| PLTR | 5% |
+| AMD | 8% |
+
+**Weekends are calmer than weeknights, not wilder.** The earlier draft assumed a
+65-hour window needed a larger cap. The weekend median is lower than the daily
+median on three of four tickers, TSLA by a factor of four. No company news, no
+earnings and no data releases land on a Saturday. The weekly tier is therefore the
+weaker product, not the stronger one, and the recommendation to launch with it is
+withdrawn. Start daily.
+
+### What BIG is worth
+
+Pooled across tickers, the mean of s at each cap. This is the break-even price: a
+minter who sells BIG above it profits on average.
+
+| Cap | Daily fair BIG | Daily pays full | Weekend fair BIG | Weekend pays full |
+| --- | --- | --- | --- | --- |
+| 1% | 0.792 | 58% | 0.658 | 46% |
+| 2% | 0.618 | 37% | 0.510 | 29% |
+| 3% | 0.511 | 26% | 0.423 | 21% |
+| 5% | 0.374 | 12% | 0.285 | 0% |
+| 8% | 0.257 | 4% | 0.178 | 0% |
+| 12% | 0.180 | 1% | 0.119 | 0% |
+
+Whether the minting side is profitable cannot be answered from this: it depends on
+what the market pays, and there is no market yet. What the data does establish is
+that fair value sits mid-range rather than pinned at either end, which is the
+precondition for a market existing at all. If fair BIG were 0.95 or 0.05 nobody
+would take the other side.
+
+"Pays full" is the share of windows settling at s = 1, where the graded payout
+collapses to a binary. At a 1% cap that is 58% of the time, which is not the
+product. Caps below 3% should not be offered.
+
+### Tiers
+
 | Tier | Cap | Opens | Settles | Per ticker per year |
 | --- | --- | --- | --- | --- |
-| Daily | 3% | after close | next open | 250 |
+| Daily | per ticker, see above | after close | next open | 250 |
 | Weekly | 5% | Friday close | Monday open | 52 |
-| Event | 12% | before earnings | first open after | 4 |
+| Event | to be measured | before earnings | first open after | 4 |
 
-Caps are placeholders until the calibration study in section 9.
+The event cap stays open. Five weeks of data contains no earnings window, so
+12% was a guess and remains one.
 
 Feeds exist for TSLA, AMD, AMZN and PLTR. NFLX has a testnet token but no
 Robinhood feed, so it cannot be used.
@@ -256,21 +316,30 @@ them and why the `fork` profile exists.
 Richter cannot launch on testnet. Testnet proves the logic only. Production is
 mainnet 4663.
 
-## 9. Calibration study, outstanding
+## 9. Calibration
 
-No settlement contract until this is done.
+Done for the daily and weekend tiers, 5 August 2026. Results in section 5.
 
-Pull the full round history for all four feeds from mainnet 4663. For each
-close-to-open pair compute the move, then produce the distribution of the move per
-ticker split by daily, weekend and earnings; the `s` each historical market would
-have settled at; the break-even price for BIG at each candidate cap; and the
-realised profit and loss of the minting side across the period.
+`research/richter_calibration.mjs` pulls every round for all four feeds and
+replays the settlement rule over every close-to-open window. It caches rounds
+under `research/data/`, which is gitignored, so re-running the analysis costs
+nothing. Roughly three and a half minutes for a cold pull of 4,548 rounds, mostly
+spent respecting the endpoint rate limit.
 
-Decision rule: if the minting side is profitable across the period, the vault
-capacity queue has real value and the token has a foundation. If not, either the
-caps are wrong or the product does not work.
+    RH_MAINNET_RPC=... node research/richter_calibration.mjs
 
-`ChainlinkRounds.lastAtOrBefore` is the primitive this study needs.
+Two things remain unmeasured.
+
+**Earnings.** Five weeks of data contains no earnings window. The event tier cap
+cannot be set until at least one full earnings season is on chain, and the first
+event market should not open before that.
+
+**Sample size.** 26 daily windows per ticker is thin. The per-ticker caps in
+section 5 are a first reading and should be recomputed monthly until the sample
+reaches a few hundred windows.
+
+Session boundaries in the script are hardcoded to EDT at UTC-4. Any run extending
+past the November change must handle EST at UTC-5.
 
 ## 10. Token
 
