@@ -1,9 +1,13 @@
 # Richter Markets
 
-Design document. Proposed, not built. Written 5 August 2026.
+Design document. Written 5 August 2026, deployed to testnet 46630 on 6 August.
 
-Every claim below is either verified against the running system on that date or
-marked open. Two earlier claims were wrong and are corrected in section 3.
+Every claim below is either verified against the running system or marked open.
+Two earlier claims were wrong and are corrected in section 3.
+
+Deployed addresses are in the README. `RichterMarketFactory` is
+`0x95640a28c99587BE263E58f6a372Cb1f7C8e5e24`, holding the relayer role on the registry, with one
+`RichterCore` per settlement currency.
 
 ## 1. Summary
 
@@ -307,14 +311,28 @@ Testnet 46630 has no equity feeds. Verified 2 August 2026: `oraclePaused()`
 reverts on the testnet token and no aggregator on 46630 answers the AggregatorV3
 interface.
 
-Two layers, both in the repo. Unit tests replay twelve real TSLA rounds through a
-phase-encoded mock and prove every branch including the failure paths a live feed
-will not perform on demand. Fork tests read the real aggregators over a fork of
-chain 4663, spending no gas. See the Testing section of the README for how to run
-them and why the `fork` profile exists.
+Three layers, all in the repo.
 
-Richter cannot launch on testnet. Testnet proves the logic only. Production is
-mainnet 4663.
+Unit tests replay twelve real TSLA rounds through a phase-encoded mock and prove
+every branch, including the failure paths a live feed will not perform on demand.
+Fork tests read the real mainnet aggregators over a fork, spending no gas. See the
+Testing section of the README for how to run them and why the `fork` profile
+exists.
+
+On chain, `MirrorAggregator` gives the testnet the round history it otherwise has
+none of. It is filled by the relayer with the real mainnet prices that relayer
+already reads, so a market settling here produces the number it would produce on
+mainnet. Its `bumpPhase` and `setPaused` switches exist so the void paths can be
+forced, have no counterpart on a real feed, and the deploy script refuses to
+deploy it anywhere but 46630.
+
+`script/smoke_richter.sh` runs the whole path against deployed contracts: it opens
+a market on a window that has already closed and reopened, splits in a 6-decimal
+and an 18-decimal collateral, settles, and checks the payout equals amount times
+the fraction to the base unit.
+
+Mainnet 4663 reads Chainlink directly, with no mirror and no relayer in the
+settlement path.
 
 ## 9. Calibration
 
@@ -359,26 +377,29 @@ both categories show measurable volume.
 
 ## 11. Rollout
 
-| Stage | Content | Exit condition |
-| --- | --- | --- |
-| 0 | Ship the current build | demo recorded, testnet stable |
-| 1 | Calibration study | caps chosen from data, or design dropped |
-| 2 | Write RichterMarketFactory, narrow scope, grant the relayer role | factory registers one market on testnet |
-| 3 | Build RichterPositionOracle, factory, graded settlement | full suite green |
-| 4 | Mainnet 4663, weekly tier, one ticker, small cap | one month, no incident |
-| 5 | Richter becomes the front page, mirror runs underneath | Richter books hold their own prices |
-| 6 | Retire the mirror and the relayer | Richter volume exceeds mirror volume |
+| Stage | Content | Exit condition | Status |
+| --- | --- | --- | --- |
+| 1 | Calibration study | caps chosen from data | done, 5 Aug, 4,548 rounds |
+| 2 | Contracts and tests | full suite green | done, 303 tests |
+| 3 | Deploy to 46630, grant the relayer role | a market opens and settles | done, 6 Aug |
+| 4 | Relayer fills the mirror and opens on the calendar | runs unattended | done, 6 Aug |
+| 5 | Web interface | a market is tradeable from the browser | next |
+| 6 | One earnings season measured | the event tier gets a cap | open |
+| 7 | Mainnet 4663, one ticker, small cap | one month, no settlement incident | open |
 
 The mirror is the liquidity scaffold that holds the book up while Richter has no
 price history. Do not remove it before the structure stands.
 
 ## 12. Open questions
 
-1. Whether Richter is built before or after the current release. A business
-   decision, not a technical one. The technical recommendation is after.
-2. Cold start pricing. Richter markets open with no price history.
-3. Gas versus stake size on the daily tier. Overnight moves are often under 1%.
-4. Tier caps. Placeholders until section 9.
-5. Sequencer uptime feed. Still not located.
-6. Jurisdiction. These are economically derivatives on US equities. Robinhood
+1. Cold start pricing. A Richter market opens with no order book and no price
+   history, and nothing yet seeds one.
+2. Gas versus stake size on the daily tier. Opening a market costs about 5.9
+   million gas across five cores, roughly what a mirrored market costs. Whether a
+   daily tier earns that back is unmeasured.
+3. The event tier has no cap. Five weeks of data holds no earnings window, so
+   12% was a guess and stays one until a season is on chain.
+4. Sequencer uptime feed. Still not located, so an outage voids through the
+   staleness rule rather than being detected.
+5. Jurisdiction. These are economically derivatives on US equities. Robinhood
    restricts Stock Tokens to non-US persons. Match that at minimum.

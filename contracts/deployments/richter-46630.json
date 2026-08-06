@@ -1,0 +1,15 @@
+{
+  "feedAMD": "0x936e7D93ca8B3E214C811F343eD60A79342aEe87",
+  "feedAMZN": "0xE2A9072246991aAe99D56A9f983550734AD26821",
+  "feedPLTR": "0xCA47c03830783f169b962C6eF1C76ea9B06cfe63",
+  "feedTSLA": "0xEED8b1d5f65e7e9B338c7B2DcBc24434F744feBc",
+  "richterCoreAMD": "0xFE9B847792313C18A09427Cd55f4647da2124952",
+  "richterCoreAMZN": "0x946BeA18233dF4A83A8363eb83ED0b7174E091Fe",
+  "richterCoreCount": 5,
+  "richterCorePLTR": "0xEa8C0C329719eB086910E8c8f481CDE9daa13D2F",
+  "richterCoreTSLA": "0xe3B635dCd1A8689aC55589ba0F72759F82d17e61",
+  "richterCoreaUSD": "0xB5b6A320572f84fDa5e01e889E3e52a59d229678",
+  "richterMarketFactory": "0x95640a28c99587BE263E58f6a372Cb1f7C8e5e24",
+  "richterNote": "caps are per ticker, reproduce with research/richter_calibration.mjs; feed* are MirrorAggregator, testnet only, not deployed on 4663",
+  "richterPositionOracle": "0x6C8b765E21C467c182362C28e86bF1695333BD9e"
+}

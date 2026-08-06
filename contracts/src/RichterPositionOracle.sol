@@ -160,6 +160,7 @@ contract RichterPositionOracle is IRichterOracle, IPositionOracle, Ownable {
         returns (bool ready, uint256 fraction, bool voided)
     {
         Window memory w = _windows[id];
+        // forge-lint: disable-next-line(block-timestamp)
         if (!w.exists || block.timestamp < w.openAt) return (false, 0, false);
         uint256 s = _settle(w);
         return (true, s, s == HALF && _voids(w));
@@ -194,6 +195,7 @@ contract RichterPositionOracle is IRichterOracle, IPositionOracle, Ownable {
     /// @inheritdoc IPositionOracle
     function isPriced(bytes32 id) external view returns (bool) {
         Window memory w = _windows[id];
+        // forge-lint: disable-next-line(block-timestamp)
         return w.exists && block.timestamp >= w.openAt;
     }
 

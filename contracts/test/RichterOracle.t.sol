@@ -75,7 +75,8 @@ contract RichterOracleTest is Test {
         registry = new MarketRegistry(address(usd), 100e6, 120, 0, address(this), 86400, 604800);
         oracle = new RichterPositionOracle(address(this));
         core = new RichterCore(address(usd), address(oracle));
-        factory = new RichterMarketFactory(address(registry), address(oracle), address(core), address(this));
+        factory = new RichterMarketFactory(address(registry), address(oracle), address(this));
+        factory.addCore(address(core));
 
         oracle.setFactory(address(factory));
         registry.setRelayer(address(factory), true);
@@ -96,7 +97,7 @@ contract RichterOracleTest is Test {
     }
 
     function _open() internal returns (bytes32 id) {
-        (id,,) = factory.open(address(feed), CLOSE, OPEN);
+        id = factory.open(address(feed), CLOSE, OPEN);
     }
 
     // -- settlement arithmetic ----------------------------------------------
@@ -112,7 +113,7 @@ contract RichterOracleTest is Test {
         down.push(100_00000000, CLOSE - 60);
         down.push(97_00000000, OPEN + 30);          // down 3%
         factory.setTicker(address(down), address(0), 500, true);
-        (bytes32 id,,) = factory.open(address(down), CLOSE, OPEN);
+        bytes32 id = factory.open(address(down), CLOSE, OPEN);
         assertEq(oracle.settlementFraction(id), 600_000, "a fall settles like a rise");
     }
 
@@ -121,7 +122,7 @@ contract RichterOracleTest is Test {
         big.push(100_00000000, CLOSE - 60);
         big.push(108_00000000, OPEN + 30);          // 8%, over a 5% cap
         factory.setTicker(address(big), address(0), 500, true);
-        (bytes32 id,,) = factory.open(address(big), CLOSE, OPEN);
+        bytes32 id = factory.open(address(big), CLOSE, OPEN);
         assertEq(oracle.settlementFraction(id), ONE);
     }
 
@@ -130,7 +131,7 @@ contract RichterOracleTest is Test {
         flat.push(100_00000000, CLOSE - 60);
         flat.push(100_00000000, OPEN + 30);
         factory.setTicker(address(flat), address(0), 500, true);
-        (bytes32 id,,) = factory.open(address(flat), CLOSE, OPEN);
+        bytes32 id = factory.open(address(flat), CLOSE, OPEN);
         assertEq(oracle.settlementFraction(id), 0);
     }
 
@@ -140,7 +141,7 @@ contract RichterOracleTest is Test {
         f.push(100_00000000, CLOSE - 60);
         f.push(int256(100_00000000 + (100_00000000 * moveBps) / 10_000), OPEN + 30);
         factory.setTicker(address(f), address(0), 500, true);
-        (bytes32 id,,) = factory.open(address(f), CLOSE, OPEN);
+        bytes32 id = factory.open(address(f), CLOSE, OPEN);
         uint256 s = oracle.settlementFraction(id);
         assertLe(s, ONE, "a fraction can never exceed one");
     }
@@ -163,7 +164,7 @@ contract RichterOracleTest is Test {
         MockFeed stale = new MockFeed();
         stale.push(100_00000000, CLOSE - 60);       // nothing after the open at all
         factory.setTicker(address(stale), address(0), 500, true);
-        (bytes32 id,,) = factory.open(address(stale), CLOSE, OPEN);
+        bytes32 id = factory.open(address(stale), CLOSE, OPEN);
         assertEq(oracle.settlementFraction(id), HALF);
     }
 
@@ -173,7 +174,7 @@ contract RichterOracleTest is Test {
         late.push(110_00000000, OPEN + 7 hours);    // past the six hour lag
         factory.setTicker(address(late), address(0), 500, true);
         vm.warp(OPEN + 8 hours);
-        (bytes32 id,,) = factory.open(address(late), CLOSE, OPEN);
+        bytes32 id = factory.open(address(late), CLOSE, OPEN);
         assertEq(oracle.settlementFraction(id), HALF, "a sequencer outage voids rather than lies");
     }
 
@@ -181,7 +182,7 @@ contract RichterOracleTest is Test {
         MockFeed young = new MockFeed();
         young.push(100_00000000, OPEN + 30);        // history starts after the close
         factory.setTicker(address(young), address(0), 500, true);
-        (bytes32 id,,) = factory.open(address(young), CLOSE, OPEN);
+        bytes32 id = factory.open(address(young), CLOSE, OPEN);
         assertEq(oracle.settlementFraction(id), HALF);
     }
 
@@ -267,7 +268,7 @@ contract RichterOracleTest is Test {
 
     function test_openIsPermissionless() public {
         vm.prank(address(0xCAFE));
-        (bytes32 id,,) = factory.open(address(feed), CLOSE, OPEN);
+        bytes32 id = factory.open(address(feed), CLOSE, OPEN);
         assertTrue(oracle.isKnownMarket(id), "anyone may pay the gas to open one");
     }
 

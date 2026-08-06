@@ -6,7 +6,7 @@
 
 [![license](https://img.shields.io/badge/license-MIT-E8E8E8?style=flat-square&labelColor=111111)](LICENSE)
 [![solidity](https://img.shields.io/badge/solidity-0.8.28-E8E8E8?style=flat-square&labelColor=111111)](contracts/foundry.toml)
-[![tests](https://img.shields.io/badge/tests-232%20passing-E8E8E8?style=flat-square&labelColor=111111)](#testing)
+[![tests](https://img.shields.io/badge/tests-303%20passing-E8E8E8?style=flat-square&labelColor=111111)](#testing)
 [![fuzz](https://img.shields.io/badge/fuzz-18%20invariants%20%C3%97%2050k-E8E8E8?style=flat-square&labelColor=111111)](#testing)
 [![chain](https://img.shields.io/badge/chain-Robinhood%20Chain-E8E8E8?style=flat-square&labelColor=111111)](https://explorer.testnet.chain.robinhood.com)
 [![settlement](https://img.shields.io/badge/settles%20in-5%20currencies-E8E8E8?style=flat-square&labelColor=111111)](#deployed-on-robinhood-chain-testnet-chainid-46630)
@@ -36,8 +36,8 @@ against a position, each priced by how much can actually be proven about what
 the collateral is worth.**
 
 **Status:** live at **[alphamarket.network](https://alphamarket.network)** on
-testnet 46630, settling in five currencies. 232 contract tests, 13 relayer
-tests, 18 fuzzed invariants at 50,000 runs each, and 7 end-to-end smoke scripts
+testnet 46630, settling in five currencies. 303 contract tests, 13 relayer
+tests, 23 fuzzed invariants at 50,000 runs each, and 8 end-to-end smoke scripts
 that run against the deployed contracts rather than a local simulator.
 
 ---
@@ -161,6 +161,97 @@ forecast.
 
 ---
 
+## Richter, trading how far rather than which way
+
+Every other market here asks which way. Richter asks how far, and throws direction
+away.
+
+A market names one equity, one closing bell, one opening bell, and a cap set for
+that ticker. It issues BIG and CALM, which always sum to one unit of collateral.
+Settlement measures how far the price moved between the two bells as a fraction of
+the cap, so a 3% fall settles identically to a 3% rise.
+
+| Overnight move, 5% cap | BIG | CALM |
+|---|---|---|
+| 0.0% | 0.00 | 1.00 |
+| 2.0% | 0.40 | 0.60 |
+| 3.5% | 0.70 | 0.30 |
+| 6.0% or more | 1.00 | 0.00 |
+
+The worst case is what was paid. There is no margin and no liquidation, because
+every position is backed by collateral locked when it was minted.
+
+### The caps were measured, not chosen
+
+Every round ever published by the four live mainnet feeds was pulled and replayed
+on 5 August 2026: 4,548 rounds, none missing, none errored.
+`research/richter_calibration.mjs` reproduces it.
+
+| Ticker | Daily median | p90 | Cap |
+|---|---|---|---|
+| AMZN | 0.75% | 2.58% | 3% |
+| TSLA | 0.93% | 3.08% | 4% |
+| PLTR | 1.66% | 4.28% | 5% |
+| AMD | 3.64% | 6.74% | 8% |
+
+Two assumptions died in that table. A shared cap is indefensible, because the
+medians span five times over and any cap that leaves AMZN interesting leaves AMD
+at the ceiling half the time, where a graded payout is a coin flip with extra
+steps. And weekends turn out calmer than weeknights on three of four tickers, TSLA
+by a factor of four, which is the opposite of what a 65-hour window suggests. No
+company files on a Saturday.
+
+### Settlement has no human in it
+
+The last round published at or before the close, and the first published at or
+after the open. `ChainlinkRounds` walks the history to find them.
+
+That walk is not a subtraction. A Chainlink proxy packs a phase into the top
+sixteen bits of a round id and the aggregator's own counter into the bottom
+sixty-four, so arithmetic on the whole id lands in a phase that never held that
+round and returns nothing rather than failing loudly. The walk decodes the id,
+decrements only the counter, refuses to step below one, and takes a bounded budget
+from its caller. Exhausting the budget is an error, never an approximation,
+because a settlement that quietly used the wrong round is indistinguishable from
+one that used the right one.
+
+Depth was measured too: covering 24 hours takes 8 steps on AMZN and 111 on AMD. A
+shared step budget would pass every test and run out of gas in production on one
+ticker.
+
+Three things make an honest settlement impossible. Chainlink can swap the
+aggregator, which restarts the counter. The stock token carries a pause flag its
+issuer raises during a corporate action. The sequencer can go down, during which
+no round is published while the real price moves. In every one of those the market
+voids at one half to each side, rather than reverting: a permanent revert would
+lock the collateral and leave any loan taken against these positions unrepayable.
+
+### It joins the collateral layer
+
+Total payout on a hedged position is `Y*s + N*(1-s)`, linear in `s`, so its
+minimum sits at an endpoint and the floor is `min(BIG, CALM)`, exactly as for a
+binary market. Nothing about graded settlement disturbs it, so `LendingVault`
+lends 95% against a Richter pair with no oracle and no liquidation engine, using
+the same enumeration proof it already uses.
+
+`DirectionalVault` refuses them, and that is a decision rather than an oversight.
+Lending against one side alone needs an external mark, and the only one available
+would be Alpha Market's own book, which can be pushed on thin liquidity, borrowed
+against at a self-made price and abandoned. The refusal is structural rather than
+a gate: that vault resolves tokens through `AlphaMarketCore`, and a Richter pair
+is minted by `RichterCore`.
+
+### Opened by a contract, not by a server
+
+`RichterMarketFactory` holds the relayer role. The ticker list, the caps and the
+schedule are all readable on an explorer, and a market id is `keccak256` of the
+factory, the feed, the cap and the close, so anyone can recompute one and check
+that a market is what it claims to be. `open` is permissionless and every
+parameter comes from the on-chain ticker table, so a caller chooses nothing and
+gains nothing by calling first.
+
+---
+
 ## Deployed on Robinhood Chain Testnet (chainId 46630)
 
 ### aUSD, the settlement currency
@@ -199,6 +290,25 @@ each. Every equity pair can secure an aUSD loan.
 | AMD | `0x5d67599a6065a490e8ef1c72e61a903169c2f95c` | `0x07fcf5406c8a2a6b312cdd07d7cce144a088b75e` | `0x9d8028019729adba13a39938e6eb8fc140bdf30f` | `0x79eed4e04878c82df42a622fd84eb454677ae908` |
 | AMZN | `0xd76142857f2f933eac4ed4ae384e435683b1f3c6` | `0xbbf7dd862e363c681f88a500354425c9dc1105dd` | `0xc7b70d0e672476514090356f09baaaed4e5be214` | `0xcaa23d695b2e99cde0362ddce1c993ed5215ab32` |
 | PLTR | `0xf201831b2042e27b2ac036eda78d6a314080dd91` | `0xd97b7b01817600915bc80de7335333c992c62293` | `0x3d6d169bf7dfd7b41e3e6bb6ca699be7d23c31db` | `0x3f5283a1ba203b7d3fe79c4501e0cf0d1cfb852d` |
+
+### Richter, markets on the size of a move
+
+| Contract | Address | Purpose |
+|---|---|---|
+| `RichterPositionOracle` | [`0x6C8b765E21C467c182362C28e86bF1695333BD9e`](https://explorer.testnet.chain.robinhood.com/address/0x6C8b765E21C467c182362C28e86bF1695333BD9e) | Reads two Chainlink rounds, returns a fraction |
+| `RichterMarketFactory` | [`0x95640a28c99587BE263E58f6a372Cb1f7C8e5e24`](https://explorer.testnet.chain.robinhood.com/address/0x95640a28c99587BE263E58f6a372Cb1f7C8e5e24) | Opens a market in every currency at once |
+| `RichterCore` (aUSD) | [`0xB5b6A320572f84fDa5e01e889E3e52a59d229678`](https://explorer.testnet.chain.robinhood.com/address/0xB5b6A320572f84fDa5e01e889E3e52a59d229678) | Graded settlement, one core per currency |
+| `RichterCore` (TSLA) | [`0xe3B635dCd1A8689aC55589ba0F72759F82d17e61`](https://explorer.testnet.chain.robinhood.com/address/0xe3B635dCd1A8689aC55589ba0F72759F82d17e61) | |
+| `RichterCore` (AMD) | [`0xFE9B847792313C18A09427Cd55f4647da2124952`](https://explorer.testnet.chain.robinhood.com/address/0xFE9B847792313C18A09427Cd55f4647da2124952) | |
+| `RichterCore` (AMZN) | [`0x946BeA18233dF4A83A8363eb83ED0b7174E091Fe`](https://explorer.testnet.chain.robinhood.com/address/0x946BeA18233dF4A83A8363eb83ED0b7174E091Fe) | |
+| `RichterCore` (PLTR) | [`0xEa8C0C329719eB086910E8c8f481CDE9daa13D2F`](https://explorer.testnet.chain.robinhood.com/address/0xEa8C0C329719eB086910E8c8f481CDE9daa13D2F) | |
+
+One core per settlement currency, because collateral is immutable on the core, so
+a market opened by the factory exists in all five at once.
+
+The four `MirrorAggregator` contracts are testnet only and are listed in
+`deployments/richter-46630.json`. Mainnet 4663 has real Chainlink equity feeds, so
+no mirror is deployed there and the deploy script refuses to.
 
 Adding a currency needed no contract change at all: the same bytecode, a
 different collateral address, and the relayer picks it up from a deployment file
@@ -420,8 +530,8 @@ Read from chain, not from memory.
 
 ```bash
 cd contracts
-forge test                                    # 232 tests
-FOUNDRY_PROFILE=deep forge test --match-test testFuzz   # 18 invariants, 50k runs
+forge test                                    # 303 tests
+FOUNDRY_PROFILE=deep forge test --match-test testFuzz   # 23 invariants, 50k runs
 
 cd ../relayer && npm test                     # 13 tests
 ```
@@ -443,6 +553,11 @@ cd ../relayer && npm test                     # 13 tests
 | `RevertAtomicity.t.sol` | 2 | A failed redeem must not burn the token |
 | `ChainlinkRounds.t.sol` | 16 | Locating a round by timestamp, replayed from real history |
 | `ChainlinkRoundsFork.t.sol` | 10 | The same walk against the live mainnet aggregators |
+| `RichterOracle.t.sol` | 24 | Graded settlement, every void path, the factory rules |
+| `RichterCore.t.sol` | 21 | The pair invariant and solvency at every fraction |
+| `MirrorAggregator.t.sol` | 14 | The testnet feed, walked by the same library |
+| `RichterMultiCurrency.t.sol` | 7 | One market, five currencies, two decimal widths |
+| `RichterVaultSeparation.t.sol` | 5 | `DirectionalVault` cannot lend against Richter |
 
 Three of those suites exist because they found real bugs:
 
@@ -464,6 +579,7 @@ Three of those suites exist because they found real bugs:
 ./script/smoke_vault.sh        # the proven floor
 ./script/smoke_parlay.sh       # combinations
 ./script/smoke_testnet.sh      # the core cycle
+./script/smoke_richter.sh      # graded settlement in two decimal widths
 ```
 
 Each asserts its final state and exits non-zero on failure.
@@ -495,12 +611,12 @@ pass.
 
 ## Design notes
 
-Work that is proposed rather than built lives in `docs/`, so this file stays a
+Work that needs more than a section here lives in `docs/`, so this file stays a
 description of what runs today.
 
-- [`docs/richter-markets.md`](docs/richter-markets.md) — a native market category
-  on the size of an equity move between one close and the next open, resolved from
-  Chainlink with no relayer in the path. Proposal, with one open blocker.
+- [`docs/richter-markets.md`](docs/richter-markets.md) — the design behind Richter:
+  the calibration study, the round-walking rules, every void path, and the
+  reasoning behind decisions this file only states.
 
 ---
 
@@ -508,15 +624,15 @@ description of what runs today.
 
 ```
 contracts/
-  src/            14 contracts + 2 interfaces
-  test/           15 suites, 232 tests
-  script/         7 deploy scripts
+  src/            18 contracts + 3 interfaces, 1 testing-only
+  test/           20 suites, 303 tests
+  script/         8 deploy scripts
   deployments/    the addresses that matter, per chain and per pair
 relayer/
   src/            config, chain, polymarket, equity, positions, matcher,
                   pairs, api, relayer, index
   test/           13 unit tests over the pure logic
-script/           7 end-to-end smoke tests
+script/           8 end-to-end smoke tests
 research/         Stage 1 measurement against public Polymarket APIs
 ```
 
@@ -574,6 +690,16 @@ Deliberate for a testnet milestone. **None may reach mainnet as-is.**
 - **Market questions and categories come from Polymarket** and are relayed
   through a single service. A market whose upstream record disappears keeps the
   text it last had.
+- **Richter settles against a mirror on testnet.** Chain 46630 has no equity
+  feeds, so its Richter markets read `MirrorAggregator` contracts filled with real
+  mainnet prices by the relayer. Enough to exercise every path including the void
+  ones, which a live feed will not perform on demand, but not the production
+  shape. Mainnet 4663 reads Chainlink directly and the deploy script refuses to
+  deploy a mirror there.
+- **The Richter caps rest on five weeks of data.** 26 daily windows per ticker,
+  and no earnings window at all, so the event tier has no cap and must not open
+  until one full earnings season is on chain. Recompute monthly with
+  `research/richter_calibration.mjs` until the sample reaches a few hundred.
 - **No external audit.**
 
 ## Build order
@@ -589,7 +715,9 @@ Deliberate for a testnet milestone. **None may reach mainnet as-is.**
 8. ~~Multi-currency settlement~~
 9. ~~Cross-collateral lending~~
 10. ~~Web interface~~
-11. Decentralised dispute escalation
+11. ~~Richter, markets on the size of a move~~ — deployed to testnet 46630 on
+    6 August 2026. Mainnet needs an earnings season measured first.
+12. Decentralised dispute escalation
 
 ## License
 

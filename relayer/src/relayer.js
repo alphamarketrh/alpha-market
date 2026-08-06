@@ -6,6 +6,7 @@ import { connect, send, toId, STATUS, OUTCOME } from "./chain.js";
 // looked like data and was not.
 import { refreshEquityPrices } from "./equity.js";
 import { refreshPositionPrices } from "./positions.js";
+import { refreshRichterRounds, openRichterMarkets } from "./richter.js";
 import { matchOrderBook } from "./matcher.js";
 import { setCycleBusy } from "./api.js";
 import { loadPairs, connectPairs, pairContext } from "./pairs.js";
@@ -53,6 +54,8 @@ async function _runCycle(ctx) {
 
   await refreshEquityPrices(ctx, state, summary);
   await refreshPositionPrices(ctx, state, summary);
+  await refreshRichterRounds(ctx, state, summary);
+  await openRichterMarkets(ctx, state, summary);
   await trackExisting(ctx, state, summary);
   await resolveParlays(ctx, state, summary);
   await matchOrderBook(ctx, state, summary);
