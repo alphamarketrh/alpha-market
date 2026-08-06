@@ -6,7 +6,7 @@
 
 [![license](https://img.shields.io/badge/license-MIT-E8E8E8?style=flat-square&labelColor=111111)](LICENSE)
 [![solidity](https://img.shields.io/badge/solidity-0.8.28-E8E8E8?style=flat-square&labelColor=111111)](contracts/foundry.toml)
-[![tests](https://img.shields.io/badge/tests-303%20passing-E8E8E8?style=flat-square&labelColor=111111)](#testing)
+[![tests](https://img.shields.io/badge/tests-332%20passing-E8E8E8?style=flat-square&labelColor=111111)](#testing)
 [![fuzz](https://img.shields.io/badge/fuzz-18%20invariants%20%C3%97%2050k-E8E8E8?style=flat-square&labelColor=111111)](#testing)
 [![chain](https://img.shields.io/badge/chain-Robinhood%20Chain-E8E8E8?style=flat-square&labelColor=111111)](https://explorer.testnet.chain.robinhood.com)
 [![settlement](https://img.shields.io/badge/settles%20in-5%20currencies-E8E8E8?style=flat-square&labelColor=111111)](#deployed-on-robinhood-chain-testnet-chainid-46630)
@@ -36,7 +36,7 @@ against a position, each priced by how much can actually be proven about what
 the collateral is worth.**
 
 **Status:** live at **[alphamarket.network](https://alphamarket.network)** on
-testnet 46630, settling in five currencies. 303 contract tests, 13 relayer
+testnet 46630, settling in five currencies. 332 contract tests, 13 relayer
 tests, 23 fuzzed invariants at 50,000 runs each, and 8 end-to-end smoke scripts
 that run against the deployed contracts rather than a local simulator.
 
@@ -250,6 +250,20 @@ that a market is what it claims to be. `open` is permissionless and every
 parameter comes from the on-chain ticker table, so a caller chooses nothing and
 gains nothing by calling first.
 
+### Its own book, because a book is bound to its core
+
+`OrderBook` holds `AlphaMarketCore` as an immutable with no setter, so it can
+never reach a pair minted by `RichterCore`. `RichterOrderBook` is the same book
+with the same three ways to match and the same escrow rules, and one difference:
+`OrderBook` asks the registry whether a market is tradeable, while a Richter
+market is not resolved through the registry at all, so this one asks the core and
+closes the moment a market settles.
+
+There is one per settlement currency, for the same reason. Its 29 tests are the
+ones that already guard `OrderBook`, because the arithmetic is identical: BIG
+plus CALM is one unit in exactly the way YES plus NO is, which is what makes the
+cold start work. A smoke test proves it on chain, from a total supply of zero.
+
 ---
 
 ## Deployed on Robinhood Chain Testnet (chainId 46630)
@@ -302,9 +316,15 @@ each. Every equity pair can secure an aUSD loan.
 | `RichterCore` (AMD) | [`0xFE9B847792313C18A09427Cd55f4647da2124952`](https://explorer.testnet.chain.robinhood.com/address/0xFE9B847792313C18A09427Cd55f4647da2124952) | |
 | `RichterCore` (AMZN) | [`0x946BeA18233dF4A83A8363eb83ED0b7174E091Fe`](https://explorer.testnet.chain.robinhood.com/address/0x946BeA18233dF4A83A8363eb83ED0b7174E091Fe) | |
 | `RichterCore` (PLTR) | [`0xEa8C0C329719eB086910E8c8f481CDE9daa13D2F`](https://explorer.testnet.chain.robinhood.com/address/0xEa8C0C329719eB086910E8c8f481CDE9daa13D2F) | |
+| `RichterOrderBook` (aUSD) | [`0x2636fa5bE45606A2c123839f4317ACEe3c0aae84`](https://explorer.testnet.chain.robinhood.com/address/0x2636fa5bE45606A2c123839f4317ACEe3c0aae84) | One book per core, bound at deployment |
+| `RichterOrderBook` (TSLA) | [`0x6139Fa5C1F71913e098f1e25344b8E0E26092efb`](https://explorer.testnet.chain.robinhood.com/address/0x6139Fa5C1F71913e098f1e25344b8E0E26092efb) | |
+| `RichterOrderBook` (AMD) | [`0x3E28Fefc6FA14cda772E24880209Bd837e2f4d6E`](https://explorer.testnet.chain.robinhood.com/address/0x3E28Fefc6FA14cda772E24880209Bd837e2f4d6E) | |
+| `RichterOrderBook` (AMZN) | [`0x59F0aE534bC7981b111E1DadbB63e81481eEd1F4`](https://explorer.testnet.chain.robinhood.com/address/0x59F0aE534bC7981b111E1DadbB63e81481eEd1F4) | |
+| `RichterOrderBook` (PLTR) | [`0x3965Ff1d6A6Db8F328680860dD856b383B568751`](https://explorer.testnet.chain.robinhood.com/address/0x3965Ff1d6A6Db8F328680860dD856b383B568751) | |
 
-One core per settlement currency, because collateral is immutable on the core, so
-a market opened by the factory exists in all five at once.
+One core and one book per settlement currency, because collateral is immutable on
+the core and the core is immutable on the book. A market opened by the factory
+exists in all five at once.
 
 The four `MirrorAggregator` contracts are testnet only and are listed in
 `deployments/richter-46630.json`. Mainnet 4663 has real Chainlink equity feeds, so
@@ -430,6 +450,7 @@ npm test                     # 13 unit tests
 | `/markets` | Every mirrored market and its status |
 | `/book` | Open orders, best bid and ask, per settlement currency, plus the question, image, category and event grouping |
 | `/rules` | The resolution rules for one market, fetched from upstream on demand |
+| `/richter` | Every Richter market, its window and cap, its settlement fraction, and its book |
 
 `/rules` is fetched rather than stored. Descriptions run to a thousand
 characters at the median and three thousand at the top, so keeping one on every
@@ -448,6 +469,13 @@ pace the RPC tolerates and every request is answered from what it last produced,
 in about fifteen milliseconds. The response carries `builtMsAgo`, so a caller
 can see how far behind the head it is. Nothing that decides a transaction is
 read from it: a wallet reads balances and orders from chain directly.
+
+`/richter` is separate from `/book` rather than folded into it. That list is built
+from Polymarket metadata and drops anything without a question, which every
+Richter market is, and it reads the mirrored book, which cannot see a Richter
+pair. The market list here comes from `MarketOpened` instead, because the factory
+keeps a mapping and no array, so the log is the index. Like `/book`, it is served
+from a background refresh and carries `builtMsAgo`.
 
 `/config` exists because addresses change whenever a contract with an immutable
 dependency is replaced, and a stale address fails **silently**: a call to a dead
@@ -530,7 +558,7 @@ Read from chain, not from memory.
 
 ```bash
 cd contracts
-forge test                                    # 303 tests
+forge test                                    # 332 tests
 FOUNDRY_PROFILE=deep forge test --match-test testFuzz   # 23 invariants, 50k runs
 
 cd ../relayer && npm test                     # 13 tests
@@ -557,6 +585,7 @@ cd ../relayer && npm test                     # 13 tests
 | `RichterCore.t.sol` | 21 | The pair invariant and solvency at every fraction |
 | `MirrorAggregator.t.sol` | 14 | The testnet feed, walked by the same library |
 | `RichterMultiCurrency.t.sol` | 7 | One market, five currencies, two decimal widths |
+| `RichterOrderBook.t.sol` | 29 | The same book against a core that settles to a fraction |
 | `RichterVaultSeparation.t.sol` | 5 | `DirectionalVault` cannot lend against Richter |
 
 Three of those suites exist because they found real bugs:
@@ -624,16 +653,16 @@ description of what runs today.
 
 ```
 contracts/
-  src/            18 contracts + 3 interfaces, 1 testing-only
-  test/           20 suites, 303 tests
-  script/         8 deploy scripts
+  src/            19 contracts + 3 interfaces, 1 testing-only
+  test/           21 suites, 332 tests
+  script/         9 deploy scripts
   deployments/    the addresses that matter, per chain and per pair
 relayer/
-  src/            config, chain, polymarket, equity, positions, matcher,
-                  pairs, api, relayer, index
+  src/            config, chain, polymarket, equity, positions, richter,
+                  richterApi, matcher, pairs, api, relayer, index
   test/           13 unit tests over the pure logic
 script/           8 end-to-end smoke tests
-research/         Stage 1 measurement against public Polymarket APIs
+research/         Stage 1 measurement, and the Richter calibration study
 ```
 
 The web interface lives in its own repository and is deployed separately.
