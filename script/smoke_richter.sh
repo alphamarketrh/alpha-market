@@ -188,6 +188,78 @@ if not (amt - 2 <= big + calm <= amt): raise SystemExit(1)
 print("  the pair invariant holds through graded settlement")
 PY
 
+say "8. the book: two wallets with cash and no tokens"
+# The cold start. Nobody holds BIG or CALM, so nobody can sell, so ordinarily
+# nobody can buy. A mint-match takes two buyers on opposite sides whose limits
+# cover one whole unit between them and creates the pair out of the cash they
+# both brought.
+BOOK=$(j "$D" richterBookaUSD)
+echo "  book     $BOOK"
+[ "$(call "$BOOK" 'core()(address)')" = "$CORE_USD" ] || die "book is bound to another core"
+
+# A second market, still unsettled, because the book refuses a settled one.
+CLOSE2=""; OPEN2=""; ID2=""
+while read -r c o; do
+  [ -n "$c" ] || continue
+  cid=$(call "$FACTORY" 'marketId(address,uint32,uint64)(bytes32)' "$FEED" "$CAP" "$c")
+  if [ "$(call "$FACTORY" 'opened(bytes32)(bool)' "$cid")" = "false" ]; then
+    CLOSE2=$c; OPEN2=$o; ID2=$cid; break
+  fi
+done <<< "$CANDIDATES"
+[ -n "$ID2" ] || die "no second window left to open"
+send "$FACTORY" 'open(address,uint64,uint64)' "$FEED" "$CLOSE2" "$OPEN2" --gas-limit 9000000
+echo "  market   $ID2"
+
+A=$(cast wallet new | grep Address | awk '{print $2}')
+AK=$(cast wallet new --json 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin)[0]['private_key'])" 2>/dev/null)
+# Deterministic throwaway keys, so the run is reproducible and nothing is left
+# holding value: everything here is testnet and returns to the deployer anyway.
+AK=0x$(openssl rand -hex 32); A=$(cast wallet address --private-key "$AK")
+BK=0x$(openssl rand -hex 32); B=$(cast wallet address --private-key "$BK")
+echo "  buyer of BIG  $A"
+echo "  buyer of CALM $B"
+
+FUND=30000000    # 30 aUSD each, enough for the order and the escrow rounding
+send "$AUSD" 'transfer(address,uint256)' "$A" "$FUND"
+send "$AUSD" 'transfer(address,uint256)' "$B" "$FUND"
+cast send --rpc-url "$RPC" --private-key "$PK" --value 0.00005ether "$A" >/dev/null
+cast send --rpc-url "$RPC" --private-key "$PK" --value 0.00005ether "$B" >/dev/null
+
+BIG2=$(call "$CORE_USD" 'tokensOf(bytes32)(address,address)' "$ID2" | sed -n 1p)
+CALM2=$(call "$CORE_USD" 'tokensOf(bytes32)(address,address)' "$ID2" | sed -n 2p)
+echo "  BIG supply before: $(call "$BIG2" 'totalSupply()(uint256)' | num)"
+
+EXP=$(( $(date +%s) + 86400 ))
+sendas(){ local k=$1; shift; cast send --rpc-url "$RPC" --private-key "$k" "$@" >/dev/null; }
+sendas "$AK" "$AUSD" 'approve(address,uint256)' "$BOOK" "$FUND"
+sendas "$BK" "$AUSD" 'approve(address,uint256)' "$BOOK" "$FUND"
+# 0.60 for BIG and 0.45 for CALM sum to 1.05, so the pair mints and the five
+# hundredths of overlap pay whoever calls the match.
+sendas "$AK" "$BOOK" 'placeOrder(bytes32,uint8,uint64,uint128,uint64)' "$ID2" 0 600000 20000000 "$EXP"
+sendas "$BK" "$BOOK" 'placeOrder(bytes32,uint8,uint64,uint128,uint64)' "$ID2" 2 450000 20000000 "$EXP"
+NEXT=$(call "$BOOK" 'nextOrderId()(uint256)' | num)
+OA=$((NEXT-2)); OB=$((NEXT-1))
+echo "  orders   $OA BuyBig at 0.60, $OB BuyCalm at 0.45"
+
+MB0=$(call "$AUSD" 'balanceOf(address)(uint256)' "$ME" | num)
+send "$BOOK" 'matchMint(uint256,uint256,uint128)' "$OA" "$OB" 20000000
+MB1=$(call "$AUSD" 'balanceOf(address)(uint256)' "$ME" | num)
+
+python3 - <<PY || die "the cold start did not create the pair"
+big = $(call "$BIG2" 'balanceOf(address)(uint256)' "$A" | num)
+calm = $(call "$CALM2" 'balanceOf(address)(uint256)' "$B" | num)
+supply = $(call "$BIG2" 'totalSupply()(uint256)' | num)
+surplus = $MB1 - $MB0
+print(f"  A holds BIG   {big}")
+print(f"  B holds CALM  {calm}")
+print(f"  BIG supply    {supply}   created from cash alone")
+print(f"  matcher took  {surplus}   the 0.05 overlap")
+if big != 20000000 or calm != 20000000: raise SystemExit(1)
+if supply != 20000000: raise SystemExit(1)
+PY
+
 say "RICHTER SMOKE TEST PASSED"
 echo "  A market on the size of a move settled to a fraction, in two collaterals"
 echo "  with different decimals, from two Chainlink rounds and no human."
+echo "  And a second one traded from nothing: two wallets holding only cash"
+echo "  became holders of opposite sides, because BIG and CALM sum to one unit."

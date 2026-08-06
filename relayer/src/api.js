@@ -2,6 +2,7 @@ import { config, loadState } from "./config.js";
 import { fetchMarket } from "./polymarket.js";
 import { mapLimit } from "./polymarket.js";
 import { loadPairs, connectPairs, pairContext } from "./pairs.js";
+import { loadRichter } from "./richter.js";
 
 /**
  * Read API for the order book.
@@ -471,6 +472,9 @@ async function buildConfig(ctx) {
       crossVaultToAUSD: p.crossVaultToAUSD,
       marginVault: p.marginVault,
     })),
+    // Null on a chain where Richter is not deployed, so a caller tests for the
+    // key rather than assuming it is there.
+    richter: loadRichter(),
     lending: await lendingSnapshot(ctx.lending),
     notes: [
       "prices are millionths of one collateral unit, so 600000 means 0.60",
@@ -479,6 +483,8 @@ async function buildConfig(ctx) {
       "a question resolves once; each pair settles that answer in its own currency",
       "YES-aUSD and YES-TSLA are different tokens with different books and prices",
       "equity lending is not deployed here: chain 46630 has no Chainlink equity feed",
+      "a richter market settles to a fraction of its cap rather than to a side, paying s and 1-s",
+      "richter feeds on 46630 mirror mainnet Chainlink; chain 4663 reads the real aggregators",
     ],
   };
 }

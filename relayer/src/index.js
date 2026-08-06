@@ -15,6 +15,7 @@ import { config, loadState } from "./config.js";
 import { connect } from "./chain.js";
 import { runCycle, preflight } from "./relayer.js";
 import { bookSnapshot, marketList, configSnapshot, startBookRefresh, marketRules } from "./api.js";
+import { richterSnapshot, startRichterRefresh } from "./richterApi.js";
 
 let health = { status: "starting", startedAt: new Date().toISOString() };
 
@@ -38,6 +39,14 @@ function serve(ctx) {
           onlyActive: url.searchParams.get("all") !== "1",
         });
         return json(res, 200, snap);
+      } catch (e) {
+        return json(res, 500, { error: String(e).slice(0, 200) });
+      }
+    }
+
+    if (url.pathname === "/richter") {
+      try {
+        return json(res, 200, await richterSnapshot(ctx));
       } catch (e) {
         return json(res, 500, { error: String(e).slice(0, 200) });
       }
@@ -109,6 +118,9 @@ async function main() {
   // Build the book once at startup and keep it warm, so no request ever
   // waits on a full sweep of the chain.
   startBookRefresh(ctx);
+  // Richter is scanned from its own event log and priced from its own books, so
+  // it refreshes on its own timer rather than riding the mirrored sweep.
+  startRichterRefresh(ctx);
   const server = serve(ctx);
   health.status = "running";
 

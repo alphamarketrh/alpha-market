@@ -58,6 +58,31 @@ const OPEN_UTC_H = 13.5;    // 09:30 ET
 
 let cached = null;
 
+/**
+ * The Richter deployment, shaped for /config.
+ *
+ * Returns null rather than throwing when Richter is not deployed on this chain,
+ * so a caller can test for the key. A broken file is reported and treated the
+ * same way, matching how loadPairs handles one: a deployment that cannot be read
+ * should not take the whole endpoint down with it.
+ */
+export function loadRichter() {
+  const rc = richterConfig();
+  if (!rc || !rc.factory) return null;
+
+  return {
+    positionOracle: rc.oracle,
+    factory: rc.factory,
+    cores: rc.cores,
+    books: rc.books,
+    // On 46630 these are MirrorAggregator contracts filled from mainnet, because
+    // this chain publishes no equity feed of its own. On 4663 the factory points
+    // at the real Chainlink proxies and no mirror exists.
+    feeds: rc.mirrors,
+    feedsAreMirrors: rc.mirrors && Object.keys(rc.mirrors).length > 0,
+  };
+}
+
 /** Read the Richter deployment file, or null when Richter is not deployed here. */
 function richterConfig() {
   if (cached !== null) return cached;
@@ -66,14 +91,36 @@ function richterConfig() {
     cached = false;
     return cached;
   }
-  const d = JSON.parse(fs.readFileSync(file, "utf8"));
+  let d;
+  try {
+    d = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (e) {
+    console.log(`  richter deployment unreadable (${String(e).slice(0, 60)}), ignoring`);
+    cached = false;
+    return cached;
+  }
+
   const mirrors = {};
   for (const sym of Object.keys(EQUITY_FEEDS)) {
     if (d[`feed${sym}`]) mirrors[sym] = d[`feed${sym}`];
   }
+
+  // One core and one book per settlement currency, keyed by that currency. A
+  // book is bound to its core by an immutable, so the pairing is fixed at
+  // deployment and cannot be reassigned later.
+  const cores = {};
+  const books = {};
+  for (const [k, v] of Object.entries(d)) {
+    if (typeof v !== "string" || !v.startsWith("0x")) continue;
+    if (k.startsWith("richterCore")) cores[k.slice("richterCore".length)] = v;
+    if (k.startsWith("richterBook")) books[k.slice("richterBook".length)] = v;
+  }
+
   cached = {
     factory: d.richterMarketFactory || null,
     oracle: d.richterPositionOracle || null,
+    cores,
+    books,
     mirrors,
   };
   return cached;
